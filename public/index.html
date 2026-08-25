@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auditorium permissions | SVIT Vasad</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead">
+      <div>
+        <p class="kicker">SVIT Vasad / campus operations</p>
+        <h1>Auditorium<br><em>permissions</em></h1>
+      </div>
+      <nav class="page-nav" aria-label="Main navigation"><a href="/login">Login <span>↗</span></a></nav>
+      <div class="mark" aria-label="SVIT">SV<span>I</span>T</div>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">Request form 01</p>
+      <h2>Reserve the room.<br>Make the case.</h2>
+      <p class="lede">Submit one clear request for every programme, lecture, rehearsal, or campus gathering.</p>
+    </section>
+
+    <section class="workspace">
+      <form class="request-form" action="/requests" method="post">
+        <div class="section-heading"><span>01</span><h3>Programme details</h3></div>
+        <div class="form-grid">
+          <label>Department<input name="department" placeholder="e.g. Computer Engineering" required></label>
+          <label>Programme name<input name="program" placeholder="e.g. Teachers' Day celebration" required></label>
+          <label>Date<input name="date" type="date" required></label>
+          <label>Duration<select name="duration"><option value="1 day">1 day</option><option value="2 days">2 days</option><option value="multiple days">Multiple days</option></select></label>
+          <label>End date<input name="end_date" type="date"></label>
+          <div class="time-row"><label>From<input name="start_time" type="time"></label><label>To<input name="end_time" type="time"></label></div>
+        </div>
+
+        <div class="section-heading"><span>02</span><h3>Room & responsibility</h3></div>
+        <div class="form-grid">
+          <fieldset><legend>Choose auditorium</legend></fieldset>
+          <label>Faculty in charge<input name="faculty_name" placeholder="Full name"></label>
+        </div>
+
+        <div class="approval-note"><strong>Review path</strong><span>Department head → Electrician → Principal → Maintenance</span></div>
+        <button type="submit">Send permission request <span>↗</span></button>
+      </form>
+
+      <aside class="side-panel">
+        <p class="eyebrow">At a glance</p>
+        <div class="stat"><strong>02</strong><span>auditoriums<br>available to request</span></div>
+        <div class="rule"></div>
+        <p class="small-copy">Requests are reviewed during working hours. Keep the room clear after your event and report any maintenance needs before leaving.</p>
+        <a href="/api/requests">View request data <span>↗</span></a>
+      </aside>
+    </section>
+
+    <footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer>
+  </main>
+</body>
+</html>
