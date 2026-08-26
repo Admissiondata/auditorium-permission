@@ -13,19 +13,19 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 *
 const port = process.env.PORT || 3000;
 const requests = [];
 const localDepartments = [
-  { id: 1, name: 'Computer Engineering', head_user_id: 'hod.computer@svit.ac.in' }
+  { id: 1, name: 'Computer Engineering', head_user_id: 'hod.computer@svitvasad.ac.in' }
 ];
 const localAuditoriums = [
-  { id: 1, name: 'Architecture Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance' },
-  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance' }
+  { id: 1, name: 'Architecture Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
+  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' }
 ];
 const users = [
-  { id: 'admin@svit.ac.in', password: 'admin123', name: 'System administrator', role: 'admin', department: 'All departments' },
-  { id: 'hod.computer@svit.ac.in', password: 'hod123', name: 'Computer Engineering HOD', role: 'head', department: 'Computer Engineering' },
-  { id: 'maintenance@svit.ac.in', password: 'maintenance123', name: 'Maintenance officer', role: 'maintenance', department: 'All departments' },
-  { id: 'electrician@svit.ac.in', password: 'electrician123', name: 'Electrician', role: 'electrician', department: 'All departments' },
-  { id: 'principal@svit.ac.in', password: 'principal123', name: 'Principal', role: 'principal', department: 'All departments' },
-  { id: 'authority@svit.ac.in', password: 'authority123', name: 'Higher authority', role: 'higher_authority', department: 'All departments' }
+  { id: 'admin@svitvasad.ac.in', password: 'admin123', name: 'System administrator', role: 'admin', department: 'All departments' },
+  { id: 'hod.computer@svitvasad.ac.in', password: 'hod123', name: 'Computer Engineering HOD', role: 'head', department: 'Computer Engineering' },
+  { id: 'rakeshthakkar.admin@svitvasad.ac.in', password: 'maintenance123', name: 'Maintenance officer', role: 'maintenance', department: 'All departments' },
+  { id: 'electrician@svitvasad.ac.in', password: 'electrician123', name: 'Electrician', role: 'electrician', department: 'All departments' },
+  { id: 'principal@svitvasad.ac.in', password: 'principal123', name: 'Principal', role: 'principal', department: 'All departments' },
+  { id: 'authority@svitvasad.ac.in', password: 'authority123', name: 'Higher authority', role: 'higher_authority', department: 'All departments' }
 ];
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 const supabase = process.env.SUPABASE_URL && supabaseKey
@@ -53,6 +53,7 @@ async function saveUser(user, passwordProvided) {
 const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD
   ? nodemailer.createTransport({ host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT || 587), secure: process.env.SMTP_SECURE === 'true', auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } })
   : null;
+let senderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'nodalofficer@svitvasad.ac.in';
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -90,29 +91,54 @@ async function getDepartments() {
   return data;
 }
 
-async function approverEmail(role, request) {
+async function approverEmail(role, request, auditorium) {
   if (role === 'head') {
     const department = (await getDepartments()).find((candidate) => candidate.name === request.department);
     return department?.head_user_id;
+  }
+  if (role === 'principal' && auditorium?.principal_user_id) {
+    return auditorium.principal_user_id;
+  }
+  if (role === 'maintenance' && auditorium?.maintenance_user_id) {
+    return auditorium.maintenance_user_id;
   }
   return (await getUsers()).find((user) => user.role === role)?.id;
 }
 
 async function notifyPendingApprover(request, auditoriumConfigs) {
   if (!mailer) return;
-  const transition = approvalTransition(request, auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {});
+  const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
+  const transition = approvalTransition(request, auditorium);
   if (!transition) return;
-  const recipient = await approverEmail(transition.role, request);
+  const recipient = await approverEmail(transition.role, request, auditorium);
   if (!recipient) return;
   try {
     await mailer.sendMail({
-      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      from: senderEmail,
       to: recipient,
       subject: `Auditorium approval pending: ${request.program}`,
       text: `A new auditorium request is waiting for your approval.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\n\nRequester: ${request.requester_name || request.faculty_name || 'Not specified'} (${request.requester_type || 'student'})\n${request.requester_enrollment_no ? `Enrollment/ID: ${request.requester_enrollment_no}\n` : ''}Branch: ${request.requester_branch || request.department}\nMobile: ${request.requester_mobile || 'Not specified'}\n\nPlease sign in to the approval desk.`
     });
   } catch (error) {
     console.error(`Approval email could not be sent to ${recipient}: ${error.message}`);
+  }
+}
+
+async function notifyRequester(request, status, remarks) {
+  if (!mailer) return;
+  const recipientEmail = request.requester_email || (request.requester_id && request.requester_id !== 'public' ? request.requester_id : null);
+  if (!recipientEmail) return;
+  const statusLabels = { approved: 'Approved', first_approved: 'First approval done', second_approved: 'Second approval done', third_approved: 'Third approval done', rejected: 'Rejected' };
+  const statusLabel = statusLabels[status] || status;
+  try {
+      await mailer.sendMail({
+        from: senderEmail,
+        to: recipientEmail,
+        subject: `Auditorium request ${statusLabel}: ${request.program}`,
+        text: `Your auditorium request has been ${statusLabel}.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: ${statusLabel}\n${remarks ? `Remarks: ${remarks}\n` : ''}\nPlease sign in to the approval desk for details.`
+      });
+  } catch (error) {
+    console.error(`Requester email could not be sent to ${recipientEmail}: ${error.message}`);
   }
 }
 
@@ -167,7 +193,7 @@ app.post('/logout', requireLogin, (req, res) => req.session.destroy(() => res.re
 app.use((req, res, next) => {
   if (req.path !== '/admin') return next();
   const send = res.send.bind(res);
-  res.send = (body) => send(typeof body === 'string' ? decorateAdminPage(body.replace('<link rel="stylesheet" href="/styles.css">', '<link rel="stylesheet" href="/styles.css"><style>.admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.admin-tools form{display:flex;gap:8px;align-items:center;margin:0}.request-actions{display:inline-block;margin:0 4px 4px 0}.reject-form input{width:150px}.reject-button{background:#e97742;color:#fff;border-color:#e97742}#action-popup{border:1px solid #e97742;padding:30px;background:#f4f0e8}</style>').replace('<h3>Department user IDs</h3>', '<h3>Department user IDs</h3><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div>').replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage departments and Heads ↗</a>')) : body);
+  res.send = (body) => send(typeof body === 'string' ? decorateAdminPage(body.replace('<link rel="stylesheet" href="/styles.css">', '<link rel="stylesheet" href="/styles.css"><style>.admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.admin-tools form{display:flex;gap:8px;align-items:center;margin:0}.request-actions{display:inline-block;margin:0 4px 4px 0}.reject-form input{width:150px}.reject-button{background:#e97742;color:#fff;border-color:#e97742}#action-popup{border:1px solid #e97742;padding:30px;background:#f4f0e8}</style>').replace('<h3>Department user IDs</h3>', '<h3>Department user IDs</h3><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div>').replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage departments and Heads ↗</a>').replace('<h2>Requests in your lane.</h2>', '<h2>Requests in your lane.</h2><div class="admin-tools" style="margin-bottom:18px"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit Maintenance Request ↗</a></div>')) : body);
   next();
 });
 
@@ -187,7 +213,7 @@ app.get('/admin', requireLogin, async (req, res) => {
   const userRows = user.role === 'admin' ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role"><option value="department_user"${candidate.role === 'department_user' ? ' selected' : ''}>Department user</option><option value="head"${candidate.role === 'head' ? ' selected' : ''}>Department head</option><option value="maintenance"${candidate.role === 'maintenance' ? ' selected' : ''}>Maintenance officer</option><option value="electrician"${candidate.role === 'electrician' ? ' selected' : ''}>Electrician</option><option value="principal"${candidate.role === 'principal' ? ' selected' : ''}>Principal</option></select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`).join('') : '';
   const auditoriums = user.role === 'admin' ? auditoriumConfigs : [];
   const requestHead = user.role === 'admin' ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">SVIT Vasad / ${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><span>02</span><h3>Department user IDs</h3></div><table><thead><tr><th>User ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>${userRows}</tbody></table><form class="create-user" action="/admin/users" method="post"><input name="id" placeholder="new-user-id" required><input name="name" placeholder="Full name" required><input name="department" placeholder="Department" required><select name="role"><option value="department_user">Department user</option><option value="head">Department head</option><option value="maintenance">Maintenance officer</option><option value="electrician">Electrician</option><option value="principal">Principal</option></select><input name="password" placeholder="Temporary password" required><button type="submit">Create user ID</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><span>02</span><h3>Department user IDs</h3></div><table><thead><tr><th>User ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>${userRows}</tbody></table><form class="create-user" action="/admin/users" method="post"><input name="id" placeholder="new-user-id" required><input name="name" placeholder="Full name" required><input name="department" placeholder="Department" required><select name="role"><option value="department_user">Department user</option><option value="head">Department head</option><option value="maintenance">Maintenance officer</option><option value="electrician">Electrician</option><option value="principal">Principal</option></select><input name="password" placeholder="Temporary password" required><button type="submit">Create user ID</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section><section class="user-management"><div class="section-heading"><span>04</span><h3>Email settings</h3></div><p class="small-copy">Sender email address for all notifications.</p><form class="create-user" action="/admin/sender-email" method="post"><input name="sender_email" type="email" value="${escapeHtml(senderEmail)}" placeholder="sender@example.com" required><button type="submit">Update sender email</button></form></section>` : ''}</main></body></html>`);
 });
 
 app.post('/admin/auditoriums', requireLogin, async (req, res) => {
@@ -200,7 +226,7 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
     const { error } = await supabase.from('auditoriums').insert({ name, capacity });
     if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Database setup required. Run supabase/schema.sql in the Supabase SQL Editor.' : error.message);
   } else if (!localAuditoriums.some((auditorium) => auditorium.name === name)) {
-    localAuditoriums.push({ id: Date.now(), name, capacity, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance' });
+    localAuditoriums.push({ id: Date.now(), name, capacity, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' });
   }
   res.redirect('/admin');
 });
@@ -208,9 +234,16 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
 app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   if (req.session.user.role !== 'admin') return res.status(403).send('Admin access required.');
   const auditoriums = await getAuditoriumConfigs();
+  const allUsers = await getUsers();
+  const principals = allUsers.filter((u) => u.role === 'principal');
+  const maintenanceUsers = allUsers.filter((u) => u.role === 'maintenance');
   const roleOptions = (selected) => ['none', 'head', 'electrician', 'principal', 'maintenance'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${role}</option>`).join('');
-  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span>Locked: hidden from request form</span><button type="submit">Unlock</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><span>Unlocked: visible on request form</span><button type="submit">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit">Delete</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit">Lock</button></form>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure first, second, and third approval roles, or delete a room.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
+  const userOptions = (users, selected, label) => {
+    const noneOption = `<option value="">-- None (${label}) --</option>`;
+    return noneOption + users.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
+  };
+  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span>Locked: hidden from request form</span><button type="submit">Unlock</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit">Delete</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit">Lock</button></form>`).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure approval roles, assign Principal and Maintenance Officer per auditorium, or delete a room.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
 });
 
 app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
@@ -219,7 +252,7 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   if (!current) return res.status(404).send('Auditorium not found.');
   if (current.is_locked) return res.status(409).send('Unlock the auditorium before editing it.');
   const capacity = Number(req.body.capacity);
-  const values = { name: String(req.body.name || '').trim(), capacity, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role };
+  const values = { name: String(req.body.name || '').trim(), capacity, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
   if (!values.name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
   if (supabase) {
@@ -385,10 +418,14 @@ function requestRow(request, user, auditoriumConfigs) {
 }
 
 function requestStatus(request, auditoriumConfigs) {
-  const transition = approvalTransition(request, auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {});
+  const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
+  const transition = approvalTransition(request, auditorium);
   if (!transition) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
   const roleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance' };
-  return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span><small>Pending: ${escapeHtml(roleNames[transition.role] || transition.role)}</small>`;
+  let pendingLabel = roleNames[transition.role] || transition.role;
+  if (transition.role === 'principal' && auditorium.principal_user_id) pendingLabel += ` (${escapeHtml(auditorium.principal_user_id)})`;
+  if (transition.role === 'maintenance' && auditorium.maintenance_user_id) pendingLabel += ` (${escapeHtml(auditorium.maintenance_user_id)})`;
+  return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span><small>Pending: ${pendingLabel}</small>`;
 }
  
 function requestWhen(request) {
@@ -430,8 +467,14 @@ function auditoriumIsBooked(requestsToCheck, auditorium, slots) {
 function approvalAction(request, user, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((candidate) => candidate.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
-  const canApprove = user.role === 'admin' || (transition && user.role === transition.role && !(user.role === 'head' && !(user.departments || [user.department]).includes(request.department)));
-  if (!canApprove) return '<span class="muted">Waiting</span>';
+  if (!transition) return '<span class="muted">Waiting</span>';
+  if (user.role === 'admin') {
+    return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
+  }
+  if (user.role !== transition.role) return '<span class="muted">Waiting</span>';
+  if (user.role === 'head' && !(user.departments || [user.department]).includes(request.department)) return '<span class="muted">Waiting</span>';
+  if (transition.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return '<span class="muted">Waiting</span>';
+  if (transition.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return '<span class="muted">Waiting</span>';
   return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
 }
 
@@ -564,6 +607,8 @@ app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
   const user = req.session.user;
   if (!transition) return res.status(409).send('This request has no remaining approval stage.');
   if (user.role !== 'admin' && user.role !== transition.role && !(user.role === 'head' && transition.role === 'head' && (user.departments || [user.department]).includes(request.department))) return res.status(403).send('This request is waiting for another approver.');
+  if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
+  if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
   if (supabase) {
     const { error } = await supabase.from('requests').update({ status: transition.status }).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -571,6 +616,7 @@ app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
     request.status = transition.status;
   }
   await notifyPendingApprover({ ...request, status: transition.status }, await getAuditoriumConfigs());
+  await notifyRequester({ ...request, status: transition.status }, transition.status);
   res.redirect('/admin');
 });
 
@@ -589,6 +635,8 @@ app.post('/admin/requests/:id/reject', requireLogin, async (req, res) => {
   if (!remarks) return res.status(400).send('Rejection remarks are required.');
   const canReject = user.role === 'admin' || (transition && user.role === transition.role && (user.role !== 'head' || (user.departments || [user.department]).includes(request.department)));
   if (!canReject) return res.status(403).send('This request is waiting for another approver.');
+  if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
+  if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
   if (supabase) {
     const { error } = await supabase.from('requests').update({ status: 'rejected', rejection_remarks: remarks }).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -596,6 +644,7 @@ app.post('/admin/requests/:id/reject', requireLogin, async (req, res) => {
     request.status = 'rejected';
     request.rejection_remarks = remarks;
   }
+  await notifyRequester({ ...request, status: 'rejected' }, 'rejected', remarks);
   res.redirect('/admin?rejected=1');
 });
 
@@ -638,8 +687,9 @@ app.post('/requests', async (req, res) => {
     requester_name: String(req.body.requester_name || '').trim(),
     requester_branch: String(req.body.requester_branch || '').trim(),
     requester_mobile: String(req.body.requester_mobile || '').trim(),
+    requester_email: String(req.body.requester_email || '').trim().toLowerCase(),
     faculty_name: req.body.requester_name || '',
-    requester_id: req.session.user?.id || 'public',
+    requester_id: req.session.user?.id || String(req.body.requester_email || '').trim().toLowerCase() || 'public',
     status: 'pending'
   };
 
@@ -685,7 +735,217 @@ app.post('/requests', async (req, res) => {
 
   await notifyPendingApprover(request, await getAuditoriumConfigs());
 
+  if (mailer && request.requester_email) {
+    try {
+      await mailer.sendMail({
+        from: senderEmail,
+        to: request.requester_email,
+        subject: `Auditorium request received: ${request.program}`,
+        text: `Your auditorium permission request has been submitted successfully.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: Pending review\n\nYour request will go through the following approval chain:\nDepartment Head → Electrician → Principal → Maintenance\n\nYou will receive an email when your request is approved or rejected.`
+      });
+    } catch (error) {
+      console.error(`Confirmation email could not be sent to ${request.requester_email}: ${error.message}`);
+    }
+  }
+
   res.redirect('/?submitted=1');
+});
+
+app.post('/admin/sender-email', requireLogin, (req, res) => {
+  if (req.session.user.role !== 'admin') return res.status(403).send('Admin access required.');
+  const email = String(req.body.sender_email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
+  senderEmail = email;
+  res.redirect('/admin');
+});
+
+const localMaintenanceRequests = [];
+
+async function getMaintenanceRequests() {
+  if (!supabase) return localMaintenanceRequests;
+  const { data, error } = await supabase.from('maintenance_requests').select('*').order('created_at', { ascending: false });
+  if (error) {
+    if (error.code === 'PGRST205') return localMaintenanceRequests;
+    throw error;
+  }
+  return data;
+}
+
+app.get('/maintenance', async (req, res) => {
+  const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'maintenance.html'), 'utf8');
+  const departments = await getDepartments();
+  const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
+  res.send(page.replace('<input name="department" placeholder="e.g. Computer Engineering" required>', `<select name="department" required><option value="">Select department</option>${departmentOptions}</select>`));
+});
+
+app.post('/maintenance', async (req, res) => {
+  const request = {
+    location: String(req.body.location || '').trim(),
+    category: req.body.category,
+    description: String(req.body.description || '').trim(),
+    priority: req.body.priority || 'medium',
+    reporter_name: String(req.body.reporter_name || '').trim(),
+    department: String(req.body.department || '').trim(),
+    reporter_mobile: String(req.body.reporter_mobile || '').trim(),
+    reporter_email: String(req.body.reporter_email || '').trim().toLowerCase(),
+    status: 'pending'
+  };
+
+  if (!request.location || !request.category || !request.description || !request.reporter_name || !request.department || !request.reporter_mobile || !request.reporter_email) {
+    return res.status(400).send('All fields are required.');
+  }
+
+  if (!['low', 'medium', 'high', 'urgent'].includes(request.priority)) {
+    return res.status(400).send('Invalid priority level.');
+  }
+
+  if (supabase) {
+    const { error } = await supabase.from('maintenance_requests').insert(request);
+    if (error) {
+      if (error.code === 'PGRST205') {
+        return res.status(503).send('Database setup required. Run supabase/schema.sql in the Supabase SQL Editor, then try again.');
+      }
+      return res.status(500).send(error.message);
+    }
+  } else {
+    localMaintenanceRequests.unshift({ id: Date.now(), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...request });
+  }
+
+  if (mailer) {
+    try {
+      await mailer.sendMail({
+        from: senderEmail,
+        to: request.reporter_email,
+        subject: `Maintenance request received: ${request.category} - ${request.location}`,
+        text: `Your maintenance request has been submitted successfully.\n\nLocation: ${request.location}\nCategory: ${request.category}\nPriority: ${request.priority}\nDescription: ${request.description}\nStatus: Pending\n\nOur maintenance team will review your request and get back to you within working hours.`
+      });
+    } catch (error) {
+      console.error(`Maintenance confirmation email could not be sent to ${request.reporter_email}: ${error.message}`);
+    }
+  }
+
+  res.redirect('/maintenance?submitted=1');
+});
+
+app.get('/admin/maintenance', requireLogin, async (req, res) => {
+  if (req.session.user.role !== 'admin' && req.session.user.role !== 'maintenance') {
+    return res.status(403).send('Admin or Maintenance access required.');
+  }
+  const allRequests = await getMaintenanceRequests();
+  const allUsers = await getUsers();
+  const maintenanceUsers = allUsers.filter((u) => u.role === 'maintenance');
+  const categoryLabels = { electrical: 'Electrical', plumbing: 'Plumbing', furniture: 'Furniture', ac_fan: 'AC / Fan', carpentry: 'Carpentry', painting: 'Painting', civil: 'Civil Work', cleaning: 'Cleaning', other: 'Other' };
+  const categoryIcons = { electrical: '⚡', plumbing: '🚰', furniture: '🪑', ac_fan: '❄️', carpentry: '🪚', painting: '🎨', civil: '🏗️', cleaning: '🧹', other: '🔧' };
+  const priorityColors = { low: 'var(--muted)', medium: 'var(--ink)', high: 'var(--orange)', urgent: '#e74c3c' };
+  const priorityBg = { low: '#f0f0f0', medium: '#e8e8e8', high: 'rgba(233,119,66,0.15)', urgent: 'rgba(231,76,60,0.15)' };
+  const statusLabels = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
+  const statusOptions = (selected) => ['pending', 'in_progress', 'completed', 'cancelled'].map((s) => `<option value="${s}"${s === selected ? ' selected' : ''}>${statusLabels[s]}</option>`).join('');
+  const assignOptions = (selected) => `<option value="">-- Unassigned --</option>` + maintenanceUsers.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
+
+  const cards = allRequests.length ? allRequests.map((req) => {
+    const createdDate = req.created_at ? new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
+    const createdTime = req.created_at ? new Date(req.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
+    return `<div class="maint-card">
+      <div class="card-header">
+        <div class="card-id">#${escapeHtml(req.id)}</div>
+        <div class="card-priority" style="background:${priorityBg[req.priority] || '#f0f0f0'}; color:${priorityColors[req.priority] || 'var(--ink)'};">${escapeHtml(req.priority.toUpperCase())}</div>
+        <div class="card-status"><span class="status ${escapeHtml(req.status)}">${escapeHtml(statusLabels[req.status] || req.status)}</span></div>
+      </div>
+      <div class="card-location">${categoryIcons[req.category] || '🔧'} ${escapeHtml(req.location)}</div>
+      <div class="card-category">${escapeHtml(categoryLabels[req.category] || req.category)}</div>
+      <div class="card-description">${escapeHtml(req.description)}</div>
+      <div class="card-meta">
+        <div class="meta-item"><strong>Reported by</strong><span>${escapeHtml(req.reporter_name)}</span></div>
+        <div class="meta-item"><strong>Department</strong><span>${escapeHtml(req.department)}</span></div>
+        <div class="meta-item"><strong>Mobile</strong><span>${escapeHtml(req.reporter_mobile)}</span></div>
+        <div class="meta-item"><strong>Email</strong><span>${escapeHtml(req.reporter_email)}</span></div>
+        <div class="meta-item"><strong>Submitted</strong><span>${createdDate} ${createdTime}</span></div>
+      </div>
+      ${req.remarks ? `<div class="card-remarks"><strong>Remarks:</strong> ${escapeHtml(req.remarks)}</div>` : ''}
+      ${req.status === 'pending' || req.status === 'in_progress' ? `
+      <div class="card-actions">
+        <form action="/admin/maintenance/${req.id}/update" method="post" class="action-form">
+          <select name="status">${statusOptions(req.status)}</select>
+          <select name="assigned_to">${assignOptions(req.assigned_to || '')}</select>
+          <input name="remarks" placeholder="Add remarks (optional)" class="remarks-input">
+          <button type="submit" class="small-button">Update</button>
+        </form>
+        <form action="/admin/maintenance/${req.id}/delete" method="post" class="action-form">
+          <button type="submit" class="small-button delete-btn">Delete</button>
+        </form>
+      </div>` : ''}
+    </div>`;
+  }).join('') : '<div class="empty-state"><p>No maintenance requests yet.</p></div>';
+
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Maintenance Requests | Admin</title><link rel="stylesheet" href="/styles.css"><style>
+    .college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}
+    .maint-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:24px;margin-top:30px}
+    .maint-card{border:1px solid var(--line);border-radius:8px;padding:24px;background:#fff;transition:box-shadow .2s}
+    .maint-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
+    .card-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+    .card-id{font:700 16px Arial,sans-serif;color:var(--ink)}
+    .card-priority{padding:4px 10px;border-radius:4px;font:600 11px Arial,sans-serif;letter-spacing:.05em}
+    .card-status{margin-left:auto}
+    .card-location{font-size:18px;font-weight:600;color:var(--ink);margin-bottom:4px}
+    .card-category{font:12px Arial,sans-serif;color:var(--orange);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
+    .card-description{font:14px/1.6 Georgia,serif;color:var(--ink);margin-bottom:16px;padding:12px;background:rgba(199,237,85,0.06);border-radius:4px;border-left:3px solid var(--lime)}
+    .card-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding-top:14px;border-top:1px solid var(--line)}
+    .meta-item{font:12px Arial,sans-serif;color:var(--muted)}
+    .meta-item strong{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;color:var(--ink)}
+    .meta-item span{color:var(--ink);font-size:13px}
+    .card-remarks{padding:10px 14px;background:#f9f9f9;border-radius:4px;margin-bottom:14px;font:13px/1.5 Arial,sans-serif}
+    .card-remarks strong{color:var(--muted)}
+    .card-actions{display:flex;gap:10px;align-items:center;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap}
+    .action-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .action-form select,.action-form input{font:12px Arial,sans-serif;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:#fff}
+    .remarks-input{width:160px}
+    .delete-btn{background:var(--orange)!important;color:#fff;border-color:var(--orange)!important}
+    .empty-state{text-align:center;padding:60px 20px;color:var(--muted);font:16px Arial,sans-serif}
+    .status{display:inline-block;padding:5px 10px;border-radius:4px;font:600 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.06em}
+    .status.pending{background:var(--lime);color:var(--ink)}.status.in_progress{background:#f0e68c;color:var(--ink)}.status.completed{background:var(--ink);color:var(--paper)}.status.cancelled{background:var(--orange);color:#fff}
+    .admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}
+    @media(max-width:760px){.maint-grid{grid-template-columns:1fr}.card-meta{grid-template-columns:1fr}.action-form{flex-direction:column;align-items:stretch}}
+  </style></head><body><main class="shell panel">
+    <div class="college-heading"><h1>SVIT VASAD</h1></div>
+    <header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Maintenance<br><em>Requests</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>
+    <section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(req.session.user.name)}</p><h2>All maintenance & repair requests.</h2><div class="admin-tools"><a class="page-nav" href="/admin">Back to Admin</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section>
+    <div class="maint-grid">${cards}</div>
+  </main></body></html>`);
+});
+
+app.post('/admin/maintenance/:id/update', requireLogin, async (req, res) => {
+  if (req.session.user.role !== 'admin' && req.session.user.role !== 'maintenance') {
+    return res.status(403).send('Admin or Maintenance access required.');
+  }
+  const status = req.body.status;
+  const assignedTo = req.body.assigned_to || null;
+  const remarks = String(req.body.remarks || '').trim();
+  if (!['pending', 'in_progress', 'completed', 'cancelled'].includes(status)) {
+    return res.status(400).send('Invalid status.');
+  }
+  const values = { status, updated_at: new Date().toISOString() };
+  if (assignedTo !== undefined) values.assigned_to = assignedTo;
+  if (remarks) values.remarks = remarks;
+  if (supabase) {
+    const { error } = await supabase.from('maintenance_requests').update(values).eq('id', req.params.id);
+    if (error) return res.status(500).send(error.message);
+  } else {
+    const req = localMaintenanceRequests.find((r) => String(r.id) === req.params.id);
+    if (req) Object.assign(req, values);
+  }
+  res.redirect('/admin/maintenance');
+});
+
+app.post('/admin/maintenance/:id/delete', requireLogin, async (req, res) => {
+  if (req.session.user.role !== 'admin') return res.status(403).send('Admin access required.');
+  if (supabase) {
+    const { error } = await supabase.from('maintenance_requests').delete().eq('id', req.params.id);
+    if (error) return res.status(500).send(error.message);
+  } else {
+    const index = localMaintenanceRequests.findIndex((r) => String(r.id) === req.params.id);
+    if (index >= 0) localMaintenanceRequests.splice(index, 1);
+  }
+  res.redirect('/admin/maintenance');
 });
 
 app.listen(port, () => {
