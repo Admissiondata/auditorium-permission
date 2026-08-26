@@ -17,4 +17,6 @@ Run `supabase/schema.sql` in the Supabase SQL editor, then copy `.env.example` t
 
 Approval order: the selected department head, then the electrician, then the principal, then maintenance. Every logged-in role can see request status. Admin can manage user IDs and see all requests.
 
+To send approval emails, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` in `.env`. Notifications are sent after a booking and after each approval to the next assigned approver.
+
 Admins can add auditorium options from the admin panel. Run `supabase/schema.sql` to create the persistent `auditoriums` table; until then, the two default rooms are available in local fallback mode.

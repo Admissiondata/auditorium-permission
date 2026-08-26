@@ -5,6 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Auditorium permissions | SVIT Vasad</title>
   <link rel="stylesheet" href="/styles.css">
+  <style>
+    .slot-list { grid-column: 1 / -1; display: grid; gap: 12px; }
+    .slot-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; align-items: end; gap: 15px; }
+    .add-slot, .remove-slot { margin: 0; padding: 8px 0; background: transparent; color: var(--ink); border: 0; border-bottom: 1px solid var(--ink); font: inherit; text-align: left; cursor: pointer; }
+    .add-slot { grid-column: 1 / -1; width: max-content; }
+    .remove-slot { font: 12px Arial, sans-serif; color: var(--muted); border-color: var(--line); }
+    .success-popup { width: min(430px, calc(100% - 32px)); border: 1px solid var(--ink); padding: 34px; color: var(--ink); background: var(--paper); box-shadow: 8px 8px 0 var(--lime); }
+    .success-popup::backdrop { background: rgba(23, 35, 31, .45); }
+    .success-popup h2 { margin: 0 0 12px; font-size: 32px; font-weight: 400; }
+    .success-popup p { margin: 0 0 24px; font: 14px/1.5 Arial, sans-serif; color: var(--muted); }
+    .success-popup button { margin: 0; padding: 11px 16px; }
+    .requester-type { display: flex; gap: 18px; margin-bottom: 6px; }
+    .requester-type label { flex-direction: row; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; color: var(--ink); font-size: 14px; cursor: pointer; }
+    .requester-type input[type="radio"] { width: auto; border-bottom: 0; padding: 0; }
+    .enrollment-field { display: none; }
+    .enrollment-field.visible { display: flex; }
+    .conflict-popup { width: min(430px, calc(100% - 32px)); border: 1px solid var(--orange); padding: 34px; color: var(--ink); background: var(--paper); box-shadow: 8px 8px 0 var(--orange); }
+    .conflict-popup h2 { margin: 0 0 12px; font-size: 30px; font-weight: 400; }
+    .conflict-popup p { margin: 0 0 24px; font: 14px/1.5 Arial, sans-serif; color: var(--muted); }
+    @media (max-width: 760px) { .slot-row { grid-template-columns: 1fr 1fr; } .slot-row label:first-child { grid-column: 1 / -1; } }
+  </style>
 </head>
 <body>
   <main class="shell">
@@ -29,16 +50,35 @@
         <div class="form-grid">
           <label>Department<input name="department" placeholder="e.g. Computer Engineering" required></label>
           <label>Programme name<input name="program" placeholder="e.g. Teachers' Day celebration" required></label>
-          <label>Date<input name="date" type="date" required></label>
-          <label>Duration<select name="duration"><option value="1 day">1 day</option><option value="2 days">2 days</option><option value="multiple days">Multiple days</option></select></label>
-          <label>End date<input name="end_date" type="date"></label>
-          <div class="time-row"><label>From<input name="start_time" type="time"></label><label>To<input name="end_time" type="time"></label></div>
+          <label>Number of students<input name="student_count" type="number" min="1" step="1" placeholder="e.g. 120" required></label>
+          <div class="slot-list" id="slot-list">
+            <div class="slot-row">
+              <label>Date<input name="slot_date[]" type="date" required></label>
+              <label>From<input name="slot_start_time[]" type="time"></label>
+              <label>To<input name="slot_end_time[]" type="time"></label>
+              <button class="remove-slot" type="button" aria-label="Remove date and time slot" hidden>Remove</button>
+            </div>
+          </div>
+          <button class="add-slot" type="button" id="add-slot">+ Add another date and time slot</button>
         </div>
 
         <div class="section-heading"><span>02</span><h3>Room & responsibility</h3></div>
         <div class="form-grid">
           <fieldset><legend>Choose auditorium</legend></fieldset>
-          <label>Faculty in charge<input name="faculty_name" placeholder="Full name"></label>
+        </div>
+
+        <div class="section-heading"><span>03</span><h3>Requester details</h3></div>
+        <div class="form-grid">
+          <label style="grid-column:1/-1">I am a
+            <div class="requester-type">
+              <label><input type="radio" name="requester_type" value="student" checked> Student</label>
+              <label><input type="radio" name="requester_type" value="faculty"> Faculty</label>
+            </div>
+          </label>
+          <label class="enrollment-field visible" id="enrollment-field">Enrollment / ID number<input name="requester_enrollment_no" placeholder="e.g. 230300119001"></label>
+          <label>Name<input name="requester_name" placeholder="Full name" required></label>
+          <label>Branch / Department<input name="requester_branch" placeholder="e.g. Computer Engineering" required></label>
+          <label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label>
         </div>
 
         <div class="approval-note"><strong>Review path</strong><span>Department head → Electrician → Principal → Maintenance</span></div>
@@ -50,11 +90,69 @@
         <div class="stat"><strong>02</strong><span>auditoriums<br>available to request</span></div>
         <div class="rule"></div>
         <p class="small-copy">Requests are reviewed during working hours. Keep the room clear after your event and report any maintenance needs before leaving.</p>
-        <a href="/api/requests">View request data <span>↗</span></a>
       </aside>
     </section>
 
     <footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer>
   </main>
+  <dialog class="success-popup" id="success-popup" aria-labelledby="success-title">
+    <h2 id="success-title">Request sent.</h2>
+    <p>Your auditorium permission request was submitted successfully and is now waiting for review.</p>
+    <button type="button" id="close-success-popup">Close</button>
+  </dialog>
+  <dialog class="conflict-popup" id="conflict-popup" aria-labelledby="conflict-title">
+    <h2 id="conflict-title">Already booked.</h2>
+    <p id="conflict-message">This auditorium is already booked for the selected date and time. Please choose another slot.</p>
+    <button type="button" id="close-conflict-popup">Choose another slot</button>
+  </dialog>
+  <script>
+    const slotList = document.querySelector('#slot-list');
+    const addSlotButton = document.querySelector('#add-slot');
+
+    addSlotButton.addEventListener('click', () => {
+      const slot = slotList.querySelector('.slot-row').cloneNode(true);
+      slot.querySelectorAll('input').forEach((input) => { input.value = ''; });
+      const removeButton = slot.querySelector('.remove-slot');
+      removeButton.hidden = false;
+      removeButton.addEventListener('click', () => slot.remove());
+      slotList.append(slot);
+    });
+
+    const enrollmentField = document.querySelector('#enrollment-field');
+    document.querySelectorAll('input[name="requester_type"]').forEach((radio) => {
+      radio.addEventListener('change', () => {
+        if (radio.value === 'student' && radio.checked) {
+          enrollmentField.classList.add('visible');
+          enrollmentField.querySelector('input').required = true;
+        } else if (radio.value === 'faculty' && radio.checked) {
+          enrollmentField.classList.remove('visible');
+          enrollmentField.querySelector('input').required = false;
+          enrollmentField.querySelector('input').value = '';
+        }
+      });
+    });
+
+    const successPopup = document.querySelector('#success-popup');
+    const closeSuccessPopup = document.querySelector('#close-success-popup');
+    closeSuccessPopup.addEventListener('click', () => successPopup.close());
+    if (new URLSearchParams(window.location.search).get('submitted') === '1') {
+      successPopup.showModal();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const conflictPopup = document.querySelector('#conflict-popup');
+    const closeConflictPopup = document.querySelector('#close-conflict-popup');
+    closeConflictPopup.addEventListener('click', () => conflictPopup.close());
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('conflict') === '1') {
+      const department = query.get('department');
+      const date = query.get('date');
+      const startTime = query.get('start_time');
+      const endTime = query.get('end_time');
+      document.querySelector('#conflict-message').textContent = `${department} has already booked this auditorium on ${date}${startTime || endTime ? ` from ${startTime || '--:--'} to ${endTime || '--:--'}` : ''}. Please choose another slot.`;
+      conflictPopup.showModal();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  </script>
 </body>
 </html>
