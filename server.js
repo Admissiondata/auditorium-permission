@@ -193,7 +193,7 @@ app.post('/logout', requireLogin, (req, res) => req.session.destroy(() => res.re
 app.use((req, res, next) => {
   if (req.path !== '/admin') return next();
   const send = res.send.bind(res);
-  res.send = (body) => send(typeof body === 'string' ? decorateAdminPage(body.replace('<link rel="stylesheet" href="/styles.css">', '<link rel="stylesheet" href="/styles.css"><style>.admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.admin-tools form{display:flex;gap:8px;align-items:center;margin:0}.request-actions{display:inline-block;margin:0 4px 4px 0}.reject-form input{width:150px}.reject-button{background:#e97742;color:#fff;border-color:#e97742}#action-popup{border:1px solid #e97742;padding:30px;background:#f4f0e8}</style>').replace('<h3>Department user IDs</h3>', '<h3>Department user IDs</h3><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div>').replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage departments and Heads ↗</a>').replace('<h2>Requests in your lane.</h2>', '<h2>Requests in your lane.</h2><div class="admin-tools" style="margin-bottom:18px"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit Maintenance Request ↗</a></div>')) : body);
+  res.send = (body) => send(typeof body === 'string' ? decorateAdminPage(body.replace('<link rel="stylesheet" href="/styles.css">', '<link rel="stylesheet" href="/styles.css"><style>.admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.admin-tools form{display:flex;gap:8px;align-items:center;margin:0}.request-actions{display:inline-block;margin:0 4px 4px 0}.reject-form input{width:150px}.reject-button{background:#e97742;color:#fff;border-color:#e97742}#action-popup{border:1px solid #e97742;padding:30px;background:#f4f0e8}</style>').replace('<h3>Department user IDs</h3>', '<h3>Department user IDs</h3><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div>').replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage departments and Heads ↗</a></div>').replace('<h2>Requests in your lane.</h2>', '<h2>Requests in your lane.</h2><div class="admin-tools" style="margin-bottom:18px"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit Maintenance Request ↗</a></div>')) : body);
   next();
 });
 
@@ -213,7 +213,7 @@ app.get('/admin', requireLogin, async (req, res) => {
   const userRows = user.role === 'admin' ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role"><option value="department_user"${candidate.role === 'department_user' ? ' selected' : ''}>Department user</option><option value="head"${candidate.role === 'head' ? ' selected' : ''}>Department head</option><option value="maintenance"${candidate.role === 'maintenance' ? ' selected' : ''}>Maintenance officer</option><option value="electrician"${candidate.role === 'electrician' ? ' selected' : ''}>Electrician</option><option value="principal"${candidate.role === 'principal' ? ' selected' : ''}>Principal</option></select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`).join('') : '';
   const auditoriums = user.role === 'admin' ? auditoriumConfigs : [];
   const requestHead = user.role === 'admin' ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><span>02</span><h3>Department user IDs</h3></div><table><thead><tr><th>User ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>${userRows}</tbody></table><form class="create-user" action="/admin/users" method="post"><input name="id" placeholder="new-user-id" required><input name="name" placeholder="Full name" required><input name="department" placeholder="Department" required><select name="role"><option value="department_user">Department user</option><option value="head">Department head</option><option value="maintenance">Maintenance officer</option><option value="electrician">Electrician</option><option value="principal">Principal</option></select><input name="password" placeholder="Temporary password" required><button type="submit">Create user ID</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section><section class="user-management"><div class="section-heading"><span>04</span><h3>Email settings</h3></div><p class="small-copy">Sender email address for all notifications.</p><form class="create-user" action="/admin/sender-email" method="post"><input name="sender_email" type="email" value="${escapeHtml(senderEmail)}" placeholder="sender@example.com" required><button type="submit">Update sender email</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><span>02</span><h3>Department user IDs</h3></div><table><thead><tr><th>User ID</th><th>Name</th><th>Department</th><th>Role</th></tr></thead><tbody>${userRows}</tbody></table><form class="create-user" action="/admin/users" method="post"><input name="id" placeholder="new-user-id" required><input name="name" placeholder="Full name" required><input name="department" placeholder="Department" required><select name="role"><option value="department_user">Department user</option><option value="head">Department head</option><option value="maintenance">Maintenance officer</option><option value="electrician">Electrician</option><option value="principal">Principal</option></select><input name="password" placeholder="Temporary password" required><button type="submit">Create user ID</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section><section class="user-management"><div class="section-heading"><span>04</span><h3>Maintenance</h3></div><p class="small-copy">Manage maintenance and repair requests.</p><div class="admin-tools"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section><section class="user-management"><div class="section-heading"><span>05</span><h3>Email settings</h3></div><p class="small-copy">Sender email address for all notifications.</p><form class="create-user" action="/admin/sender-email" method="post"><input name="sender_email" type="email" value="${escapeHtml(senderEmail)}" placeholder="sender@example.com" required><button type="submit">Update sender email</button></form></section>` : ''}</main></body></html>`);
 });
 
 app.post('/admin/auditoriums', requireLogin, async (req, res) => {
@@ -828,110 +828,177 @@ app.post('/maintenance', async (req, res) => {
 });
 
 app.get('/admin/maintenance', requireLogin, async (req, res) => {
-  if (req.session.user.role !== 'admin' && req.session.user.role !== 'maintenance') {
-    return res.status(403).send('Admin or Maintenance access required.');
+  const user = req.session.user;
+  if (user.role !== 'admin' && user.role !== 'maintenance' && user.role !== 'head' && user.role !== 'electrician' && user.role !== 'principal') {
+    return res.status(403).send('Access required.');
   }
   const allRequests = await getMaintenanceRequests();
-  const allUsers = await getUsers();
-  const maintenanceUsers = allUsers.filter((u) => u.role === 'maintenance');
   const categoryLabels = { electrical: 'Electrical', plumbing: 'Plumbing', furniture: 'Furniture', ac_fan: 'AC / Fan', carpentry: 'Carpentry', painting: 'Painting', civil: 'Civil Work', cleaning: 'Cleaning', other: 'Other' };
   const categoryIcons = { electrical: '⚡', plumbing: '🚰', furniture: '🪑', ac_fan: '❄️', carpentry: '🪚', painting: '🎨', civil: '🏗️', cleaning: '🧹', other: '🔧' };
   const priorityColors = { low: 'var(--muted)', medium: 'var(--ink)', high: 'var(--orange)', urgent: '#e74c3c' };
   const priorityBg = { low: '#f0f0f0', medium: '#e8e8e8', high: 'rgba(233,119,66,0.15)', urgent: 'rgba(231,76,60,0.15)' };
-  const statusLabels = { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', cancelled: 'Cancelled' };
-  const statusOptions = (selected) => ['pending', 'in_progress', 'completed', 'cancelled'].map((s) => `<option value="${s}"${s === selected ? ' selected' : ''}>${statusLabels[s]}</option>`).join('');
-  const assignOptions = (selected) => `<option value="">-- Unassigned --</option>` + maintenanceUsers.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
+  const statusLabels = { pending: 'Pending', hod_approved: 'HOD Approved', electrician_approved: 'Electrician Approved', principal_approved: 'Principal Approved', maintenance_approved: 'Maintenance Approved', completed: 'Completed', rejected: 'Rejected' };
+  const roleNames = { head: 'Department Head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance' };
 
-  const cards = allRequests.length ? allRequests.map((req) => {
+  const maintApprovalTransition = (req) => {
+    const stages = ['pending', 'hod_approved', 'electrician_approved', 'principal_approved', 'maintenance_approved'];
+    const stageIndex = stages.indexOf(req.status);
+    if (stageIndex === -1 || stageIndex >= stages.length - 1) return null;
+    const nextStage = stages[stageIndex + 1];
+    const roleMap = { hod_approved: 'head', electrician_approved: 'electrician', principal_approved: 'principal', maintenance_approved: 'maintenance' };
+    return { role: roleMap[nextStage], status: nextStage };
+  };
+
+  const maintApprovalAction = (req, user) => {
+    const transition = maintApprovalTransition(req);
+    if (!transition) return '<span class="muted">Completed</span>';
+    if (user.role === 'admin') {
+      return `<form class="request-actions" action="/admin/maintenance/${req.id}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/maintenance/${req.id}/reject" method="post"><input name="remarks" placeholder="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
+    }
+    if (user.role === transition.role) {
+      return `<form class="request-actions" action="/admin/maintenance/${req.id}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/maintenance/${req.id}/reject" method="post"><input name="remarks" placeholder="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
+    }
+    return '<span class="muted">Waiting</span>';
+  };
+
+  const maintStatusDisplay = (req) => {
+    const transition = maintApprovalTransition(req);
+    const statusClass = req.status === 'rejected' ? 'rejected' : req.status === 'completed' ? 'approved' : req.status.includes('approved') ? 'approved' : 'pending';
+    let html = `<span class="status ${statusClass}">${escapeHtml(statusLabels[req.status] || req.status)}</span>`;
+    if (transition) {
+      html += `<small>Pending: ${escapeHtml(roleNames[transition.role] || transition.role)}</small>`;
+    }
+    if (req.rejection_remarks) {
+      html += `<small>Remarks: ${escapeHtml(req.rejection_remarks)}</small>`;
+    }
+    return html;
+  };
+
+  const rows = allRequests.length ? allRequests.map((req) => {
     const createdDate = req.created_at ? new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
     const createdTime = req.created_at ? new Date(req.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-    return `<div class="maint-card">
-      <div class="card-header">
-        <div class="card-id">#${escapeHtml(req.id)}</div>
-        <div class="card-priority" style="background:${priorityBg[req.priority] || '#f0f0f0'}; color:${priorityColors[req.priority] || 'var(--ink)'};">${escapeHtml(req.priority.toUpperCase())}</div>
-        <div class="card-status"><span class="status ${escapeHtml(req.status)}">${escapeHtml(statusLabels[req.status] || req.status)}</span></div>
-      </div>
-      <div class="card-location">${categoryIcons[req.category] || '🔧'} ${escapeHtml(req.location)}</div>
-      <div class="card-category">${escapeHtml(categoryLabels[req.category] || req.category)}</div>
-      <div class="card-description">${escapeHtml(req.description)}</div>
-      <div class="card-meta">
-        <div class="meta-item"><strong>Reported by</strong><span>${escapeHtml(req.reporter_name)}</span></div>
-        <div class="meta-item"><strong>Department</strong><span>${escapeHtml(req.department)}</span></div>
-        <div class="meta-item"><strong>Mobile</strong><span>${escapeHtml(req.reporter_mobile)}</span></div>
-        <div class="meta-item"><strong>Email</strong><span>${escapeHtml(req.reporter_email)}</span></div>
-        <div class="meta-item"><strong>Submitted</strong><span>${createdDate} ${createdTime}</span></div>
-      </div>
-      ${req.remarks ? `<div class="card-remarks"><strong>Remarks:</strong> ${escapeHtml(req.remarks)}</div>` : ''}
-      ${req.status === 'pending' || req.status === 'in_progress' ? `
-      <div class="card-actions">
-        <form action="/admin/maintenance/${req.id}/update" method="post" class="action-form">
-          <select name="status">${statusOptions(req.status)}</select>
-          <select name="assigned_to">${assignOptions(req.assigned_to || '')}</select>
-          <input name="remarks" placeholder="Add remarks (optional)" class="remarks-input">
-          <button type="submit" class="small-button">Update</button>
-        </form>
-        <form action="/admin/maintenance/${req.id}/delete" method="post" class="action-form">
-          <button type="submit" class="small-button delete-btn">Delete</button>
-        </form>
-      </div>` : ''}
-    </div>`;
-  }).join('') : '<div class="empty-state"><p>No maintenance requests yet.</p></div>';
+    return `<tr>
+      <td>#${escapeHtml(req.id)}</td>
+      <td>${categoryIcons[req.category] || '🔧'} ${escapeHtml(req.location)}<small>${escapeHtml(categoryLabels[req.category] || req.category)}</small></td>
+      <td><span class="priority-badge" style="background:${priorityBg[req.priority] || '#f0f0f0'};color:${priorityColors[req.priority] || 'var(--ink)'}">${escapeHtml(req.priority.toUpperCase())}</span></td>
+      <td>${escapeHtml(req.description)}<small>${escapeHtml(req.reporter_name)} · ${escapeHtml(req.department)}</small><small>${escapeHtml(req.reporter_mobile)} · ${escapeHtml(req.reporter_email)}</small></td>
+      <td>${createdDate}<small>${createdTime}</small></td>
+      <td>${maintStatusDisplay(req)}</td>
+      <td>${maintApprovalAction(req, user)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7">No maintenance requests yet.</td></tr>';
 
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Maintenance Requests | Admin</title><link rel="stylesheet" href="/styles.css"><style>
     .college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}
-    .maint-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:24px;margin-top:30px}
-    .maint-card{border:1px solid var(--line);border-radius:8px;padding:24px;background:#fff;transition:box-shadow .2s}
-    .maint-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
-    .card-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-    .card-id{font:700 16px Arial,sans-serif;color:var(--ink)}
-    .card-priority{padding:4px 10px;border-radius:4px;font:600 11px Arial,sans-serif;letter-spacing:.05em}
-    .card-status{margin-left:auto}
-    .card-location{font-size:18px;font-weight:600;color:var(--ink);margin-bottom:4px}
-    .card-category{font:12px Arial,sans-serif;color:var(--orange);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px}
-    .card-description{font:14px/1.6 Georgia,serif;color:var(--ink);margin-bottom:16px;padding:12px;background:rgba(199,237,85,0.06);border-radius:4px;border-left:3px solid var(--lime)}
-    .card-meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding-top:14px;border-top:1px solid var(--line)}
-    .meta-item{font:12px Arial,sans-serif;color:var(--muted)}
-    .meta-item strong{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px;color:var(--ink)}
-    .meta-item span{color:var(--ink);font-size:13px}
-    .card-remarks{padding:10px 14px;background:#f9f9f9;border-radius:4px;margin-bottom:14px;font:13px/1.5 Arial,sans-serif}
-    .card-remarks strong{color:var(--muted)}
-    .card-actions{display:flex;gap:10px;align-items:center;padding-top:14px;border-top:1px solid var(--line);flex-wrap:wrap}
-    .action-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .action-form select,.action-form input{font:12px Arial,sans-serif;padding:8px 10px;border:1px solid var(--line);border-radius:4px;background:#fff}
-    .remarks-input{width:160px}
-    .delete-btn{background:var(--orange)!important;color:#fff;border-color:var(--orange)!important}
-    .empty-state{text-align:center;padding:60px 20px;color:var(--muted);font:16px Arial,sans-serif}
-    .status{display:inline-block;padding:5px 10px;border-radius:4px;font:600 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.06em}
-    .status.pending{background:var(--lime);color:var(--ink)}.status.in_progress{background:#f0e68c;color:var(--ink)}.status.completed{background:var(--ink);color:var(--paper)}.status.cancelled{background:var(--orange);color:#fff}
+    .panel-intro h2{font-size:42px;font-weight:400;margin:14px 0 10px;letter-spacing:-.03em}
+    .panel-intro .lede{font:14px/1.5 Arial,sans-serif;color:var(--muted)}
+    .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font:14px Arial,sans-serif}
+    th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);padding:13px 10px;border-bottom:1px solid var(--ink)}
+    td{padding:17px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+    td small{display:block;color:var(--muted);font-size:11px;margin-top:3px}
+    .status{display:inline-block;padding:5px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.06em}
+    .status.pending{background:var(--lime);color:var(--ink)}
+    .status.approved{background:var(--lime);color:var(--ink)}
+    .status.rejected{background:var(--orange);color:#fff}
+    .muted{color:var(--muted);font-size:12px}
+    .small-button{margin:0;padding:8px 10px;font-size:10px}
+    .request-actions{display:inline-block;margin:0 4px 4px 0}
+    .reject-form input{width:150px;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:4px}
+    .reject-button{background:#e97742;color:#fff;border-color:#e97742}
+    .priority-badge{display:inline-block;padding:4px 10px;border-radius:4px;font:600 11px Arial,sans-serif;letter-spacing:.05em}
     .admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}
-    @media(max-width:760px){.maint-grid{grid-template-columns:1fr}.card-meta{grid-template-columns:1fr}.action-form{flex-direction:column;align-items:stretch}}
+    .approval-note{display:flex;align-items:center;gap:15px;padding:16px 20px;background:rgba(199,237,85,0.15);border-radius:4px;margin:20px 0;font:13px/1.4 Arial,sans-serif}
+    .approval-note strong{color:var(--ink)}.approval-note span{color:var(--muted)}
   </style></head><body><main class="shell panel">
     <div class="college-heading"><h1>SVIT VASAD</h1></div>
-    <header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Maintenance<br><em>Requests</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>
-    <section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(req.session.user.name)}</p><h2>All maintenance & repair requests.</h2><div class="admin-tools"><a class="page-nav" href="/admin">Back to Admin</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section>
-    <div class="maint-grid">${cards}</div>
+    <header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Maintenance<br><em>Approval Desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>
+    <section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Maintenance requests.</h2><p class="lede">Department head → Electrician → Principal → Maintenance.</p><div class="admin-tools"><a class="page-nav" href="/admin">Back to Admin</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section>
+    <div class="approval-note"><strong>Approval path</strong><span>Department Head → Electrician → Principal → Maintenance Officer</span></div>
+    <section class="table-wrap"><table><thead><tr><th>ID</th><th>Location</th><th>Priority</th><th>Details</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></section>
   </main></body></html>`);
 });
 
-app.post('/admin/maintenance/:id/update', requireLogin, async (req, res) => {
-  if (req.session.user.role !== 'admin' && req.session.user.role !== 'maintenance') {
-    return res.status(403).send('Admin or Maintenance access required.');
-  }
-  const status = req.body.status;
-  const assignedTo = req.body.assigned_to || null;
-  const remarks = String(req.body.remarks || '').trim();
-  if (!['pending', 'in_progress', 'completed', 'cancelled'].includes(status)) {
-    return res.status(400).send('Invalid status.');
-  }
-  const values = { status, updated_at: new Date().toISOString() };
-  if (assignedTo !== undefined) values.assigned_to = assignedTo;
-  if (remarks) values.remarks = remarks;
+app.post('/admin/maintenance/:id/approve', requireLogin, async (req, res) => {
+  const user = req.session.user;
+  let request = localMaintenanceRequests.find((r) => String(r.id) === req.params.id);
   if (supabase) {
-    const { error } = await supabase.from('maintenance_requests').update(values).eq('id', req.params.id);
+    const { data, error } = await supabase.from('maintenance_requests').select('*').eq('id', req.params.id).maybeSingle();
     if (error) return res.status(500).send(error.message);
-  } else {
-    const req = localMaintenanceRequests.find((r) => String(r.id) === req.params.id);
-    if (req) Object.assign(req, values);
+    request = data;
+  }
+  if (!request) return res.status(404).send('Request not found.');
+
+  const stages = ['pending', 'hod_approved', 'electrician_approved', 'principal_approved', 'maintenance_approved'];
+  const roleMap = { hod_approved: 'head', electrician_approved: 'electrician', principal_approved: 'principal', maintenance_approved: 'maintenance' };
+  const stageIndex = stages.indexOf(request.status);
+  if (stageIndex === -1 || stageIndex >= stages.length - 1) return res.status(409).send('This request has no remaining approval stage.');
+  const nextStatus = stages[stageIndex + 1];
+  const requiredRole = roleMap[nextStatus];
+
+  if (user.role !== 'admin' && user.role !== requiredRole) return res.status(403).send('This request is waiting for another approver.');
+
+  if (supabase) {
+    const { error } = await supabase.from('maintenance_requests').update({ status: nextStatus, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+    if (error) return res.status(500).send(error.message);
+  } else if (request) {
+    request.status = nextStatus;
+    request.updated_at = new Date().toISOString();
+  }
+
+  if (nextStatus === 'maintenance_approved') {
+    const allRequests2 = supabase ? (await supabase.from('maintenance_requests').select('*').eq('id', req.params.id).maybeSingle()).data : request;
+    if (mailer && allRequests2?.reporter_email) {
+      try {
+        await mailer.sendMail({
+          from: senderEmail,
+          to: allRequests2.reporter_email,
+          subject: `Maintenance request approved: ${allRequests2.location}`,
+          text: `Your maintenance request has been fully approved.\n\nLocation: ${allRequests2.location}\nCategory: ${allRequests2.category}\nPriority: ${allRequests2.priority}\nStatus: Fully Approved\n\nOur team will begin work shortly.`
+        });
+      } catch (e) { console.error(`Approval email error: ${e.message}`); }
+    }
+  }
+  res.redirect('/admin/maintenance');
+});
+
+app.post('/admin/maintenance/:id/reject', requireLogin, async (req, res) => {
+  const user = req.session.user;
+  let request = localMaintenanceRequests.find((r) => String(r.id) === req.params.id);
+  if (supabase) {
+    const { data, error } = await supabase.from('maintenance_requests').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) return res.status(500).send(error.message);
+    request = data;
+  }
+  if (!request) return res.status(404).send('Request not found.');
+
+  const stages = ['pending', 'hod_approved', 'electrician_approved', 'principal_approved', 'maintenance_approved'];
+  const roleMap = { hod_approved: 'head', electrician_approved: 'electrician', principal_approved: 'principal', maintenance_approved: 'maintenance' };
+  const stageIndex = stages.indexOf(request.status);
+  if (stageIndex === -1 || stageIndex >= stages.length - 1) return res.status(409).send('This request has no remaining approval stage.');
+  const requiredRole = roleMap[stages[stageIndex]];
+
+  const remarks = String(req.body.remarks || '').trim();
+  if (!remarks) return res.status(400).send('Rejection remarks are required.');
+  if (user.role !== 'admin' && user.role !== requiredRole) return res.status(403).send('This request is waiting for another approver.');
+
+  if (supabase) {
+    const { error } = await supabase.from('maintenance_requests').update({ status: 'rejected', rejection_remarks: remarks, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+    if (error) return res.status(500).send(error.message);
+  } else if (request) {
+    request.status = 'rejected';
+    request.rejection_remarks = remarks;
+    request.updated_at = new Date().toISOString();
+  }
+
+  if (mailer && request?.reporter_email) {
+    try {
+      await mailer.sendMail({
+        from: senderEmail,
+        to: request.reporter_email,
+        subject: `Maintenance request rejected: ${request.location}`,
+        text: `Your maintenance request has been rejected.\n\nLocation: ${request.location}\nCategory: ${request.category}\nStatus: Rejected\nRemarks: ${remarks}\n\nPlease contact the administration for more details.`
+      });
+    } catch (e) { console.error(`Rejection email error: ${e.message}`); }
   }
   res.redirect('/admin/maintenance');
 });

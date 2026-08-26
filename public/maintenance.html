@@ -44,6 +44,9 @@
     .priority-options label:hover { border-color: var(--ink); }
     .priority-options input[type="radio"] { width: auto; border-bottom: 0; padding: 0; margin-right: 4px; }
     .maint-form button[type="submit"] { margin-top: 10px; padding: 14px 24px; font-size: 14px; }
+    .approval-note { display: flex; align-items: center; gap: 15px; padding: 16px 20px; background: rgba(199, 237, 85, 0.15); border-radius: 4px; margin: 25px 0; font: 13px/1.4 Arial, sans-serif; }
+    .approval-note strong { color: var(--ink); }
+    .approval-note span { color: var(--muted); }
     .success-popup { width: min(430px, calc(100% - 32px)); border: 1px solid var(--ink); padding: 34px; color: var(--ink); background: var(--paper); box-shadow: 8px 8px 0 var(--lime); }
     .success-popup::backdrop { background: rgba(23, 35, 31, .45); }
     .success-popup h2 { margin: 0 0 12px; font-size: 32px; font-weight: 400; }
@@ -130,6 +133,7 @@
             <label>Email address<input name="reporter_email" type="email" placeholder="e.g. name@svitvasad.ac.in" required></label>
           </div>
 
+          <div class="approval-note"><strong>Review path</strong><span>Department head → Electrician → Principal → Maintenance</span></div>
           <button type="submit">Submit maintenance request <span>↗</span></button>
         </form>
       </section>
