@@ -120,4 +120,8 @@ create index if not exists maintenance_requests_status_idx on public.maintenance
 create index if not exists maintenance_requests_priority_idx on public.maintenance_requests (priority);
 create index if not exists maintenance_requests_category_idx on public.maintenance_requests (category);
 
+alter table public.maintenance_requests drop constraint if exists maintenance_requests_status_check;
+alter table public.maintenance_requests add constraint maintenance_requests_status_check check (status in ('pending', 'hod_approved', 'electrician_approved', 'principal_approved', 'maintenance_approved', 'completed', 'rejected'));
+alter table public.maintenance_requests add column if not exists rejection_remarks text;
+
 notify pgrst, 'reload schema';
