@@ -221,7 +221,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (req.path !== '/admin') return next();
   const send = res.send.bind(res);
-  res.send = (body) => send(typeof body === 'string' ? body.replace('<option value="department_user"', '<option value="admin_officer">Admin Officer</option><option value="purchase_officer">Purchase Officer</option><option value="chairman">Chairman</option><option value="department_user"') : body);
+  res.send = (body) => send(typeof body === 'string' ? body.replace('<option value="department_user"', '<option value="admin_officer">Admin Officer</option><option value="purchase_officer">Purchase Officer</option><option value="purchase_clerk">Purchase Clerk</option><option value="chairman">Chairman</option><option value="department_user"') : body);
   next();
 });
 
@@ -566,14 +566,14 @@ app.post('/admin/users/import', requireLogin, upload.single('users_file'), async
       const email = String(row.email || '').trim().toLowerCase();
       const password = String(row.password || '').trim();
       const normalizedRole = String(row.role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-      const roleLabels = { 'department_user': 'department_user', 'department_head': 'head', 'maintenance_officer': 'maintenance', 'admin_officer': 'admin_officer', 'purchase_officer': 'purchase_officer', 'chairman': 'chairman', 'principal': 'principal', 'electrician': 'electrician', 'head': 'head', 'maintenance': 'maintenance' };
+      const roleLabels = { 'department_user': 'department_user', 'department_head': 'head', 'maintenance_officer': 'maintenance', 'admin_officer': 'admin_officer', 'purchase_officer': 'purchase_officer', 'purchase_clerk': 'purchase_clerk', 'chairman': 'chairman', 'principal': 'principal', 'electrician': 'electrician', 'head': 'head', 'maintenance': 'maintenance' };
       const role = roleLabels[normalizedRole] || normalizedRole;
       const existing = currentUsers.find((user) => user.id === email);
       const missing = ['email', 'name', 'department', 'role', 'password'].filter((field) => !String(row[field] || '').trim());
       const reason = missing.length && !(missing.length === 1 && missing[0] === 'password' && existing)
         ? `missing ${missing.map((field) => field[0].toUpperCase() + field.slice(1)).join(', ')}`
         : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? 'invalid Email'
-          : !['department_user', 'head', 'maintenance', 'electrician', 'principal', 'admin_officer', 'purchase_officer', 'chairman'].includes(role) ? `invalid Role "${String(row.role).trim()}"`
+          : !['department_user', 'head', 'maintenance', 'electrician', 'principal', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman'].includes(role) ? `invalid Role "${String(row.role).trim()}"`
             : (!existing && password.length < 6) || (existing && password && password.length < 6) ? 'Password must contain at least 6 characters' : '';
       if (reason) return res.status(400).send(`Invalid Excel row ${rowIndex + 2}: ${reason}. Required columns: Email, Name, Department, Role, Password.`);
       const values = { id: email, name: String(row.name).trim(), department: String(row.department).trim(), role };
@@ -874,6 +874,27 @@ async function getCarRequests() {
   return data;
 }
 
+app.use('/car-requests', (req, res, next) => {
+  if (req.method === 'POST') {
+    req.body.requester_name = String(req.body.faculty_name || req.body.requester_name || '').trim();
+    const passengerDetails = Array.isArray(req.body.passenger_emp_code)
+      ? req.body.passenger_emp_code.map((empCode, index) => ({
+        sr_no: index + 1,
+        emp_code: String(empCode || '').trim(),
+        emp_name: String((req.body.passenger_emp_name || [])[index] || '').trim(),
+        designation: String((req.body.passenger_designation || [])[index] || '').trim(),
+        department: String((req.body.passenger_department || [])[index] || '').trim()
+      }))
+      : [];
+    req.body.remarks = `${String(req.body.remarks || '').trim()}${passengerDetails.length ? `\nPassenger details: ${JSON.stringify(passengerDetails)}` : ''}`.trim();
+  }
+  if (req.method === 'GET') {
+    const send = res.send.bind(res);
+    res.send = (body) => send(typeof body === 'string' ? body.replace('<label>Passenger count<input name="passenger_count" type="number" min="1" required></label>', '<label>Passenger count<input name="passenger_count" id="passenger-count" type="number" min="1" required></label><div id="passenger-details" class="passenger-details"></div>').replace('<label>Name<input name="requester_name" placeholder="Full name" required></label>', '<label>Faculty name<input name="faculty_name" placeholder="Full faculty name" required></label>').replace('Send car request <span>↗</span>', 'Add car request <span>↗</span>').replace('</form>', '<script>const countInput=document.querySelector("#passenger-count");const details=document.querySelector("#passenger-details");function renderPassengerDetails(){const count=Math.max(0,Number(countInput.value)||0);details.innerHTML=Array.from({length:count},(_,index)=>`<div class="passenger-row"><strong>${index+1}</strong><input name="passenger_emp_code[]" placeholder="Emp Code" required><input name="passenger_emp_name[]" placeholder="Emp Name" required><input name="passenger_designation[]" placeholder="Designation" required><input name="passenger_department[]" placeholder="Department" required></div>`).join("");}countInput.addEventListener("input",renderPassengerDetails);renderPassengerDetails();</script></form>') : body);
+  }
+  next();
+});
+
 app.get('/car-requests', async (req, res) => {
   const departments = await getDepartments();
   const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
@@ -1104,6 +1125,7 @@ app.post('/admin/maintenance/:id/delete', requireLogin, async (req, res) => {
 });
 
 const localPurchaseRequests = [];
+const localPurchaseStock = [];
 const purchaseApprovalSettings = {
   stationary: { roles: ['head', 'admin_officer', 'principal', 'none'], threshold: 10000 },
   local: { roles: ['head', 'principal', 'chairman', 'purchase_officer'], threshold: 10000 },
@@ -1120,20 +1142,32 @@ async function getPurchaseRequests() {
   return data;
 }
 
+async function getPurchaseStock() {
+  if (!supabase) return localPurchaseStock;
+  const { data, error } = await supabase.from('purchase_stock').select('*').order('department').order('item_name');
+  if (error) {
+    if (error.code === 'PGRST205' || error.code === '42501') return localPurchaseStock;
+    throw error;
+  }
+  return data || [];
+}
+
+const canManagePurchases = (user) => isAdmin(user) || user?.role === 'purchase_officer' || user?.role === 'purchase_clerk';
+
 app.get('/admin/purchase/settings', requireLogin, (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
   const rows = Object.entries(purchaseApprovalSettings).map(([type, setting]) => `<form class="approval-setting" action="/admin/purchase/settings" method="post"><input type="hidden" name="purchase_type" value="${type}"><strong>${type}</strong><select name="role_1">${['head', 'admin_officer', 'principal', 'chairman', 'purchase_officer', 'none'].map((role) => `<option${setting.roles[0] === role ? ' selected' : ''}>${role}</option>`).join('')}</select><select name="role_2">${['head', 'admin_officer', 'principal', 'chairman', 'purchase_officer', 'none'].map((role) => `<option${setting.roles[1] === role ? ' selected' : ''}>${role}</option>`).join('')}</select><select name="role_3">${['head', 'admin_officer', 'principal', 'chairman', 'purchase_officer', 'none'].map((role) => `<option${setting.roles[2] === role ? ' selected' : ''}>${role}</option>`).join('')}</select><select name="role_4">${['head', 'admin_officer', 'principal', 'chairman', 'purchase_officer', 'none'].map((role) => `<option${setting.roles[3] === role ? ' selected' : ''}>${role}</option>`).join('')}</select><label>Amount threshold<input name="threshold" type="number" min="0" step="1" value="${setting.threshold}"></label><button type="submit">Save ${type} route</button></form>`).join('');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Purchase approval roles</title><link rel="stylesheet" href="/styles.css"><style>.approval-setting{display:grid;grid-template-columns:1fr repeat(4,1fr) 1fr auto;gap:10px;align-items:end;border-top:1px solid var(--line);padding:20px 0}.approval-setting select,.approval-setting input{padding:10px;border:1px solid var(--line);background:transparent;font:13px Arial}.approval-setting label{font-size:10px}@media(max-width:800px){.approval-setting{grid-template-columns:1fr 1fr}.approval-setting strong{grid-column:1/-1}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Purchase<br><em>approval roles</em></h1><a class="page-nav" href="/admin/pages">Back to admin pages</a></header><section class="panel-intro"><p class="eyebrow">Admin settings</p><h2>Role approval routes.</h2><p class="lede">Set the order for Head, Admin Officer, Principal, Chairman, Purchase Officer, or None. Local purchases use the Rs. 10,000 threshold by default.</p></section>${rows}</main></body></html>`);
 });
 
 app.get('/admin/purchase/export', requireLogin, async (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
   const rows = await getPurchaseRequests();
   workbookResponse(res, rows.map((request) => ({ Type: request.purchase_type, Department: request.department, Item: request.item_name, Quantity: request.quantity, UnitPrice: request.unit_price, Priority: request.priority, Status: request.status })), 'purchase-requests.xlsx');
 });
 
 app.get('/admin/purchase/template', requireLogin, (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
   workbookResponse(res, [{ Type: 'stationary', Department: 'Computer Engineering', Item: 'A4 paper', Quantity: 10, UnitPrice: 120, Priority: 'medium', Status: 'pending' }], 'purchase-template.xlsx');
 });
 
@@ -1147,16 +1181,41 @@ app.post('/admin/purchase/settings', requireLogin, (req, res) => {
 });
 
 app.get('/admin/purchase/:id/print', requireLogin, async (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
   const request = (await getPurchaseRequests()).find((candidate) => String(candidate.id) === req.params.id);
   if (!request) return res.status(404).send('Purchase request not found.');
-  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Purchase approval</title><style>body{font:16px Arial;max-width:760px;margin:40px auto;color:#17231f}h1{font:32px Georgia;font-weight:400;border-bottom:1px solid;padding-bottom:15px}.details{display:grid;grid-template-columns:1fr 1fr;gap:15px;border:1px solid #ccc;padding:20px}.signatures{display:grid;grid-template-columns:repeat(4,1fr);gap:25px;margin-top:90px}.signatures div{border-top:1px solid;padding-top:10px}@media print{button{display:none}}</style></head><body><button onclick="print()">Print / Save as PDF</button><h1>Purchase Approval</h1><div class="details"><b>Type</b><span>${escapeHtml(request.purchase_type)}</span><b>Department</b><span>${escapeHtml(request.department)}</span><b>Item</b><span>${escapeHtml(request.item_name)}</span><b>Quantity</b><span>${escapeHtml(request.quantity)}</span><b>Amount</b><span>Rs. ${(Number(request.quantity) * Number(request.unit_price)).toFixed(2)}</span><b>Status</b><span>${escapeHtml(request.status)}</span></div><div class="signatures"><div>Head</div><div>Admin Officer</div><div>Principal</div><div>Chairman</div></div></body></html>`);
+  const stock = await getPurchaseStock();
+  const printItems = Array.isArray(request.item_details) && request.item_details.length
+    ? request.item_details
+    : [{ item: request.item_name, quantity: request.quantity, purpose: request.description, admin_level: 'none' }];
+  const printRows = printItems.map((item, index) => {
+    const stockRecord = stock.find((s) => s.item_name === item.item && s.department === request.department);
+    const stockQty = stockRecord ? Number(stockRecord.stock_quantity) : 0;
+    return `<tr><td>${index + 1}</td><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.admin_level || 'none')}</td><td>${escapeHtml(item.quantity)}</td><td>${stockQty > 0 ? stockQty : 'Out of Stock'}</td>${request.purchase_type === 'stationary' ? `<td>${escapeHtml(item.purpose || '')}</td>` : ''}</tr>`;
+  }).join('');
+  const typeLabel = request.purchase_type === 'cleaning' ? 'Cleaning Items' : request.purchase_type === 'electric' ? 'Electric Items' : 'Stationery';
+  res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Purchase requisition slip</title><style>body{font:14px Arial;max-width:860px;margin:40px auto;color:#17231f}h1{text-align:center;font-size:24px;margin:0}h2{text-align:center;font-size:18px;font-weight:400;margin:8px 0 28px}.meta{display:flex;justify-content:space-between;border-bottom:1px solid #17231f;padding:12px 0}.slip{width:100%;border-collapse:collapse;margin-top:22px}.slip th,.slip td{border:1px solid #17231f;padding:9px;text-align:left}.slip th{background:#17231f;color:#fff}.signatures{display:grid;grid-template-columns:repeat(4,1fr);gap:25px;margin-top:100px}.signatures div{border-top:1px solid;padding-top:10px}@media print{button{display:none}}@media(max-width:600px){.signatures{grid-template-columns:1fr 1fr}}</style></head><body><button onclick="print()">Print / Save as PDF</button><h1>Sardar Vallabhbhai Patel Institute of Technology, Vasad</h1><h2>Requisition Slip for Departmental ${typeLabel}</h2><div class="meta"><span>Dept: ${escapeHtml(request.department)}</span><span>Date: ${escapeHtml(request.created_at ? new Date(request.created_at).toLocaleDateString('en-IN') : '')}</span></div><table class="slip"><thead><tr><th>Sr.</th><th>Item</th><th>Admin Level</th><th>Nos</th><th>Stock</th>${request.purchase_type === 'stationary' ? '<th>Purpose</th>' : ''}</tr></thead><tbody>${printRows}</tbody></table><div class="signatures"><div>Department Head</div><div>Admin Officer</div><div>Principal</div><div>Chairman</div></div></body></html>`);
 });
 
 const purchasePageConfig = {
   local: { title: 'Local', emphasis: 'purchase', description: 'Submit items procured from nearby vendors.', button: 'Submit local purchase request' },
   stationary: { title: 'Purchase', emphasis: 'stationary', description: 'Submit office and academic stationery supplies.', button: 'Submit stationery request' },
-  cleaning: { title: 'Cleaning', emphasis: 'items', description: 'Submit hygiene and sanitation supply requests.', button: 'Submit cleaning items request' }
+  cleaning: { title: 'Cleaning', emphasis: 'items', description: 'Submit hygiene and sanitation supply requests.', button: 'Submit cleaning items request' },
+  electric: { title: 'Electric', emphasis: 'items', description: 'Submit electrical equipment and supply requests.', button: 'Submit electric items request' }
+};
+
+const purchaseItemCatalog = {
+  cleaning: ['Fool Zadu', 'Sali Zadu Heavy', 'Khajoori Brush', 'Napthalene Balls', 'Bava Zadu', 'Rubber Hand Glows', 'Plastic Kucha (Big)', 'Odonil', 'Dori Refill', 'Dori Refill with Bracket', "Wiper 3'", 'Toilet Brush', 'Toilet Liquid', 'Soap (Lifebuoy)', 'Washing Soap (Wheel)', 'Wheel Powder (500 Gram)', 'Cotton Cloth (Waste)', 'Phenyle Liquid', 'Urinal Screen', 'Wooden Stick', 'Plastic Road Brush', 'Big Dustbin', 'Vacuum For Toilet'],
+  stationary: ['A/4 Size Paper', 'Case a Cap in', 'Sticker Paper', 'Colour Paper (A4 Size)', 'White Board Marker Pen', 'Pencil', 'Eraser', 'Box File', 'Special File', 'Cutter', 'CD Marker Pen', 'Whitener', 'Student Gate Pass Book', 'Gum Stick', 'Cell (Pencil)', 'Scale', 'Cello Tape 1 Big, 1 Small', 'Stapler', 'Stapler Pin', 'Full Scape Book', 'Phenyle Balls', 'Punch Machine', 'Canteen Book', 'Chalk', 'Water Glass', 'Letter Head', 'Soap (Lifebouy)', 'Bucket (Big)', 'Soap (Washing)', 'Gate Pass College work', 'Gate Pass Half Leave'],
+  electric: ['LED Tube Light', 'LED Bulb', 'Ceiling Fan', 'Exhaust Fan', 'Switch Board', 'MCB', 'Wire (Copper)', 'Cable Tie', 'Electrical Tape', 'Socket', 'Plug Top', 'Extension Board', 'Tube Light Choke', 'Starter', 'Regulator', 'Capacitor', 'Bell Push', 'Indicator Light', 'Main Switch', 'Distribution Board', 'Earth Wire', 'PVC Pipe', 'Casing Capping', 'Junction Box', 'Modular Switch', 'Modular Socket', 'Fan Capacitor', 'Tube Light Frame', 'Batten Holder', 'Angle Holder']
+};
+
+const stockCategories = {
+  stationary: purchaseItemCatalog.stationary,
+  cleaning: purchaseItemCatalog.cleaning,
+  electric: purchaseItemCatalog.electric,
+  plumbing: ['PVC Pipe', 'Tap', 'Bib Cock', 'Angle Valve', 'Flexible Pipe', 'P-trap', 'Floor Trap', 'Waste Coupling', 'Water Hose', 'Pipe Clamp', 'Teflon Tape', 'Sealant', 'Gate Valve', 'Ball Valve', 'Check Valve', 'Water Meter', 'Pressure Gauge'],
+  misc: ['Miscellaneous item']
 };
 
 app.get('/purchase/:type', async (req, res) => {
@@ -1164,26 +1223,38 @@ app.get('/purchase/:type', async (req, res) => {
   if (!config) return res.status(404).send('Purchase page not found.');
   const departments = await getDepartments();
   const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
-  const stationeryRows = req.params.type === 'stationary' ? '<button class="add-slot" type="button" id="add-item">+ Add another stationery item</button>' : '';
-  const itemFields = req.params.type === 'stationary'
-    ? '<div id="item-list"><div class="form-grid item-row"><label>Item name<input name="item_name" placeholder="e.g. A4 paper reams" required></label><label>Quantity<input name="quantity" type="number" min="1" step="1" placeholder="e.g. 50" required></label></div></div>'
+  const stock = await getPurchaseStock();
+  const catalogue = purchaseItemCatalog[req.params.type];
+  const adminLevelOptions = ['head', 'admin_officer', 'principal', 'chairman', 'purchase_officer', 'none'].map((role) => `<option value="${role}">${role}</option>`).join('');
+  const itemOptions = catalogue
+    ? catalogue.map((item) => {
+        const stockRecord = stock.find((s) => s.item_name === item);
+        const stockQty = stockRecord ? Number(stockRecord.stock_quantity) : 0;
+        return `<option value="${escapeHtml(item)}" data-stock="${stockQty}">${escapeHtml(item)}${stockQty > 0 ? ` (Stock: ${stockQty})` : ' (Out of Stock)'}</option>`;
+      }).join('')
+    : '';
+  const itemSelectOptions = catalogue ? `<option value="">Select item</option>${itemOptions}` : '';
+  const itemFields = catalogue
+    ? `<div class="requisition-table-wrap"><table class="requisition-table"><thead><tr><th>Sr. No.</th><th>Item</th><th>Admin Level</th><th>Nos</th><th>Stock</th>${req.params.type === 'stationary' ? '<th>Purpose</th>' : ''}<th></th></tr></thead><tbody id="item-list"><tr class="item-row"><td class="item-number">1</td><td><select name="item_name[]" required>${itemSelectOptions}</select></td><td><select name="purchase_admin_level[]">${adminLevelOptions}</select></td><td><input name="quantity[]" type="number" min="1" step="1" placeholder="Nos" required></td><td class="stock-cell">--</td>${req.params.type === 'stationary' ? '<td><input name="item_purpose[]" placeholder="Purpose"></td>' : ''}<td><button class="remove-item" type="button" aria-label="Remove item" hidden>×</button></td></tr></tbody></table><button class="add-slot" type="button" id="add-item">+ Add item</button></div><script>const itemList=document.querySelector("#item-list");const addItem=document.querySelector("#add-item");const stockData=${JSON.stringify(catalogue ? catalogue.reduce((acc, item) => { const sr = stock.find(s => s.item_name === item); acc[item] = sr ? Number(sr.stock_quantity) : 0; return acc; }, {}) : {})};function renumberItems(){itemList.querySelectorAll(".item-row").forEach((row,index)=>{row.querySelector(".item-number").textContent=index+1;row.querySelector(".remove-item").hidden=itemList.children.length===1;});}function updateStockDisplay(row){const select=row.querySelector("select[name=\"item_name[]\"]");const stockCell=row.querySelector(".stock-cell");const qtyInput=row.querySelector("input[name=\"quantity[]\"]");const itemName=select.value;const stockQty=stockData[itemName]||0;stockCell.textContent=stockQty>0?stockQty:"Out of Stock";stockCell.style.color=stockQty>0?"var(--ink)":"var(--orange)";stockCell.classList.toggle("out",stockQty<=0);const options=select.querySelectorAll("option");options.forEach(opt=>{const optStock=Number(opt.dataset.stock||0);if(optStock<=0 && opt.value!=="" ) opt.disabled=true;else opt.disabled=false;});if(itemName && stockQty<=0){qtyInput.disabled=true;qtyInput.placeholder="Out of stock";}else{qtyInput.disabled=false;qtyInput.placeholder="Nos";}}itemList.querySelectorAll(".item-row").forEach(updateStockDisplay);itemList.addEventListener("change",(e)=>{if(e.target.name==="item_name[]"){updateStockDisplay(e.target.closest(".item-row"));}});addItem.addEventListener("click",()=>{const row=itemList.querySelector(".item-row").cloneNode(true);row.querySelectorAll("input").forEach((input)=>{input.value="";});row.querySelector("select[name=\"item_name[]\"]").selectedIndex=0;row.querySelector("select[name=\"purchase_admin_level[]\"]").selectedIndex=0;row.querySelector(".remove-item").hidden=false;row.querySelector(".remove-item").addEventListener("click",()=>{row.remove();renumberItems();});itemList.append(row);renumberItems();updateStockDisplay(row);});renumberItems();</script>`
     : '<div class="form-grid"><label>Item name<input name="item_name" placeholder="e.g. Printer cartridges" required></label><label>Quantity<input name="quantity" type="number" min="1" step="1" placeholder="e.g. 10" required></label></div>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${config.title} ${config.emphasis}</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell"><div class="college-heading"><h1>SVIT VASAD</h1></div><div class="request-layout"><aside class="side-panel"><h2>Purchase<br><em>desk</em></h2><p class="sub-title">Choose a request category.</p><div class="rule"></div><nav class="nav-buttons"><a href="/" class="nav-btn"><span class="btn-icon">🏛️</span> Auditorium Permission</a><a href="/maintenance" class="nav-btn"><span class="btn-icon">🔧</span> Maintenance Request</a><a href="/purchase/local" class="nav-btn${req.params.type === 'local' ? ' active' : ''}"><span class="btn-icon">🏪</span> Local Purchase</a><a href="/purchase/stationary" class="nav-btn${req.params.type === 'stationary' ? ' active' : ''}"><span class="btn-icon">📦</span> Purchase Stationery</a><a href="/purchase/cleaning" class="nav-btn${req.params.type === 'cleaning' ? ' active' : ''}"><span class="btn-icon">🧹</span> Cleaning Items</a><a href="/login" class="nav-btn"><span class="btn-icon">🔐</span> Sign in</a></nav></aside><section class="main-content"><p class="eyebrow">Purchase form</p><h1>${config.title}<br><em>${config.emphasis}</em></h1><p class="lede">${config.description}</p><form class="request-form" action="/purchase" method="post"><input type="hidden" name="purchase_type" value="${req.params.type}"><div class="section-heading"><span>01</span><h3>Item details</h3></div><label>Department<select name="department" required><option value="">Select department</option>${departmentOptions}</select></label>${itemFields}<label>Unit price (₹)<input name="unit_price" type="number" min="0" step="0.01" placeholder="e.g. 250.00"></label><label>Description<textarea name="description" placeholder="Describe the item and purpose..."></textarea></label><label>Vendor name<input name="vendor" placeholder="Vendor name"></label>${stationeryRows}<div class="section-heading"><span>02</span><h3>Your details</h3></div><div class="form-grid"><label>Name<input name="requester_name" placeholder="Full name" required></label><label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label><label>Email address<input name="requester_email" type="email" placeholder="name@svitvasad.ac.in" required></label><label>Priority<select name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label></div><button type="submit">${config.button} <span>↗</span></button></form></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main>${req.query.submitted === '1' ? '<script>alert("Purchase request submitted successfully.");</script>' : ''}${req.params.type === 'stationary' ? '<script>document.querySelector("#add-item").addEventListener("click",()=>{const row=document.querySelector(".item-row").cloneNode(true);row.querySelectorAll("input").forEach(input=>{input.value="";input.removeAttribute("required");});document.querySelector("#item-list").append(row);});</script>' : ''}</body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${config.title} ${config.emphasis}</title><link rel="stylesheet" href="/styles.css"><style>.stock-cell{font-weight:600;color:var(--ink)}.stock-cell.out{color:var(--orange)}</style></head><body><main class="shell"><div class="college-heading"><h1>SVIT VASAD</h1></div><div class="request-layout"><aside class="side-panel"><h2>Purchase<br><em>desk</em></h2><p class="sub-title">Choose a request category.</p><div class="rule"></div><nav class="nav-buttons"><a href="/" class="nav-btn"><span class="btn-icon">🏛️</span> Auditorium Permission</a><a href="/maintenance" class="nav-btn"><span class="btn-icon">🔧</span> Maintenance Request</a><a href="/purchase/local" class="nav-btn${req.params.type === 'local' ? ' active' : ''}"><span class="btn-icon">🏪</span> Local Purchase</a><a href="/purchase/stationary" class="nav-btn${req.params.type === 'stationary' ? ' active' : ''}"><span class="btn-icon">📦</span> Purchase Stationery</a><a href="/purchase/cleaning" class="nav-btn${req.params.type === 'cleaning' ? ' active' : ''}"><span class="btn-icon">🧹</span> Cleaning Items</a><a href="/purchase/electric" class="nav-btn${req.params.type === 'electric' ? ' active' : ''}"><span class="btn-icon">⚡</span> Electric Items</a><a href="/login" class="nav-btn"><span class="btn-icon">🔐</span> Sign in</a></nav></aside><section class="main-content"><p class="eyebrow">Purchase form</p><h1>${config.title}<br><em>${config.emphasis}</em></h1><p class="lede">${config.description}</p><form class="request-form" action="/purchase" method="post"><input type="hidden" name="purchase_type" value="${req.params.type}"><div class="section-heading"><span>01</span><h3>Item details</h3></div><label>Department<select name="department" required><option value="">Select department</option>${departmentOptions}</select></label>${itemFields}<label>Unit price (₹)<input name="unit_price" type="number" min="0" step="0.01" placeholder="e.g. 250.00"></label><label>Description<textarea name="description" placeholder="Describe the item and purpose..."></textarea></label><label>Vendor name<input name="vendor" placeholder="Vendor name"></label><div class="section-heading"><span>02</span><h3>Your details</h3></div><div class="form-grid"><label>Name<input name="requester_name" placeholder="Full name" required></label><label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label><label>Email address<input name="requester_email" type="email" placeholder="name@svitvasad.ac.in" required></label><label>Priority<select name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label></div><button type="submit">${config.button} <span>↗</span></button></form></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main>${req.query.submitted === '1' ? '<script>alert("Purchase request submitted successfully.");</script>' : ''}</body></html>`);
 });
 
 app.post('/purchase', async (req, res) => {
   const purchaseType = req.body.purchase_type;
-  if (!['local', 'stationary', 'cleaning'].includes(purchaseType)) {
+  if (!['local', 'stationary', 'cleaning', 'electric'].includes(purchaseType)) {
     return res.status(400).send('Invalid purchase type.');
   }
 
-  const itemNames = Array.isArray(req.body.item_name) ? req.body.item_name.map((item) => String(item).trim()).filter(Boolean) : [String(req.body.item_name || '').trim()];
-  const quantities = Array.isArray(req.body.quantity) ? req.body.quantity.map(Number).filter((quantity) => Number.isInteger(quantity) && quantity > 0) : [Number(req.body.quantity)];
+  const itemNames = Array.isArray(req.body.item_name) ? req.body.item_name.map((item) => String(item).trim()) : [String(req.body.item_name || '').trim()];
+  const quantities = Array.isArray(req.body.quantity) ? req.body.quantity.map((quantity) => Number(quantity) || 0) : [Number(req.body.quantity) || 0];
+  const adminLevels = Array.isArray(req.body.purchase_admin_level) ? req.body.purchase_admin_level.map((level) => String(level).trim()) : [String(req.body.purchase_admin_level || '').trim()];
   const request = {
     purchase_type: purchaseType,
     department: String(req.body.department || '').trim(),
     item_name: itemNames.join(', '),
     quantity: quantities.reduce((total, quantity) => total + quantity, 0),
+    item_details: itemNames.map((item, index) => ({ item, quantity: quantities[index] || 0, purpose: Array.isArray(req.body.item_purpose) ? String(req.body.item_purpose[index] || '').trim() : '', admin_level: adminLevels[index] || 'none' })).filter((item) => item.quantity > 0),
     unit_price: Number(req.body.unit_price) || 0,
     description: String(req.body.description || '').trim(),
     vendor: String(req.body.vendor || '').trim(),
@@ -1193,6 +1264,25 @@ app.post('/purchase', async (req, res) => {
     priority: req.body.priority || 'medium',
     status: 'pending'
   };
+
+  if (req.body.confirm_out_of_stock !== '1') {
+    const stock = await getPurchaseStock();
+    const stockIssues = request.item_details.filter((item) => {
+      const record = stock.find((candidate) => candidate.department === request.department && candidate.item_name === item.item);
+      return record && Number(record.stock_quantity) < item.quantity;
+    });
+    if (stockIssues.length) {
+      req.session.pendingPurchase = request;
+      const issueRows = stockIssues.map((item) => {
+        const record = stock.find((candidate) => candidate.department === request.department && candidate.item_name === item.item);
+        return `<tr><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.quantity)}</td><td>${escapeHtml(record.stock_quantity)}</td></tr>`;
+      }).join('');
+      return res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Confirm out of stock</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><section class="panel-intro"><p class="eyebrow">Stock confirmation</p><h1>Out of<br><em>stock</em></h1><p class="lede">Some requested items do not have enough stock for ${escapeHtml(request.department)}.</p></section><table class="requisition-table"><thead><tr><th>Item</th><th>Requested</th><th>Available</th></tr></thead><tbody>${issueRows}</tbody></table><form method="post" action="/purchase"><input type="hidden" name="purchase_type" value="${escapeHtml(request.purchase_type)}"><input type="hidden" name="confirm_out_of_stock" value="1"><button type="submit">Confirm purchase request <span>↗</span></button></form></main></body></html>`);
+    }
+  } else if (req.session.pendingPurchase) {
+    Object.assign(request, req.session.pendingPurchase);
+    delete req.session.pendingPurchase;
+  }
 
   if (!request.department || !request.item_name || !request.quantity || !request.requester_name || !request.requester_mobile || !request.requester_email) {
     return res.status(400).send('All required fields must be filled.');
@@ -1207,7 +1297,11 @@ app.post('/purchase', async (req, res) => {
   }
 
   if (supabase) {
-    const { error } = await supabase.from('purchase_requests').insert(request);
+    let { error } = await supabase.from('purchase_requests').insert(request);
+    if (error?.message?.includes("'item_details' column")) {
+      const { item_details: unusedItemDetails, ...legacyRequest } = request;
+      ({ error } = await supabase.from('purchase_requests').insert(legacyRequest));
+    }
     if (error) {
       if (error.code === 'PGRST205') {
         return res.status(503).send('Database setup required. Run supabase/schema.sql in the Supabase SQL Editor, then try again.');
@@ -1221,15 +1315,68 @@ app.post('/purchase', async (req, res) => {
   res.redirect(`/purchase/${purchaseType}?submitted=1`);
 });
 
+app.get('/admin/purchase/stock', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
+  const stock = await getPurchaseStock();
+  const categoryOptions = Object.keys(stockCategories).map((category) => `<option value="${category}">${category[0].toUpperCase() + category.slice(1)} Items</option>`).join('');
+  const catalogJson = JSON.stringify(stockCategories);
+  const rows = stock.length ? stock.map((item) => `<tr><td>${escapeHtml(item.category || 'misc')}</td><td>${escapeHtml(item.department)}</td><td>${escapeHtml(item.item_name)}</td><td>${escapeHtml(item.stock_quantity)}</td><td><form class="stock-inline" action="/admin/purchase/stock/${item.id}/delete" method="post"><button class="small-button reject-button" type="submit">Delete</button></form></td></tr>`).join('') : '<tr><td colspan="5">No stock records yet.</td></tr>';
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stock register | Purchase</title><link rel="stylesheet" href="/styles.css"><style>.stock-register{margin-top:30px}.stock-form{display:grid;gap:10px}.stock-row{display:grid;grid-template-columns:1fr 1fr 1.5fr 1fr auto;gap:10px;align-items:end}.stock-row select,.stock-row input{min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}.stock-actions{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stock-inline{margin:0}.register-table{margin-top:25px}@media(max-width:800px){.stock-row{grid-template-columns:1fr 1fr}.stock-row button{grid-column:span 2}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Stock<br><em>register</em></h1></div><a class="page-nav" href="/admin/purchase">Back to purchase desk</a></header><section class="panel-intro"><p class="eyebrow">Inventory control</p><h2>Department-wise stock register.</h2><p class="lede">Save available stock for stationery, cleaning, electrical, plumbing, and miscellaneous items.</p></section><section class="stock-register"><div class="section-heading"><span>01</span><h3>Add or update stock</h3></div><form class="stock-form" action="/admin/purchase/stock" method="post"><div class="stock-row"><select class="stock-category" name="category[]" required>${categoryOptions}</select><input name="department[]" placeholder="Department" required><select class="stock-item" name="item_name[]" required></select><input name="stock_quantity[]" type="number" min="0" placeholder="Quantity" required><button class="remove-stock" type="button" aria-label="Remove stock row" hidden>×</button></div><button class="add-slot" id="add-stock" type="button">+ Add stock row</button><button type="submit">Save stock</button></form><div class="stock-actions"><a class="page-nav" href="/admin/purchase/stock/template">Download stock template</a><form action="/admin/purchase/stock/upload" method="post" enctype="multipart/form-data"><input type="file" name="stock_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div><div class="table-wrap register-table"><table><thead><tr><th>Category</th><th>Department</th><th>Item</th><th>Available stock</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section></main><script>const stockCategories=${catalogJson};const stockList=document.querySelector('.stock-form');const stockRow=stockList.querySelector('.stock-row');function updateStockItems(row){const select=row.querySelector('.stock-category');const item=row.querySelector('.stock-item');item.innerHTML='<option value="">Select item</option>'+stockCategories[select.value].map((name)=>'<option value="'+name+'">'+name+'</option>').join('');}function updateStockRows(){const rows=stockList.querySelectorAll('.stock-row');rows.forEach((row)=>{row.querySelector('.remove-stock').hidden=rows.length===1;updateStockItems(row);});}stockList.querySelector('#add-stock').addEventListener('click',()=>{const row=stockRow.cloneNode(true);row.querySelectorAll('input').forEach((input)=>input.value='');row.querySelector('.stock-category').selectedIndex=0;row.querySelector('.remove-stock').hidden=false;row.querySelector('.remove-stock').addEventListener('click',()=>{row.remove();updateStockRows();});stockList.insertBefore(row,stockList.querySelector('#add-stock'));updateStockRows();});updateStockRows();</script></body></html>`);
+});
+
+app.get('/admin/purchase/stock/template', requireLogin, (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
+  workbookResponse(res, [{ Category: 'stationary', Department: 'Computer Engineering', Item: 'A/4 Size Paper', Stock: 10 }], 'stock-register-template.xlsx');
+});
+
+app.post('/admin/purchase/stock/upload', requireLogin, upload.single('stock_file'), async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
+  if (!req.file) return res.status(400).send('Please upload an Excel file.');
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: '' });
+    for (const row of rows) {
+      const values = { category: String(row.Category || row.category || 'misc').trim().toLowerCase(), department: String(row.Department || row.department || '').trim(), item_name: String(row.Item || row.item || row['Item Name'] || '').trim(), stock_quantity: Number(row.Stock ?? row['Stock Quantity'] ?? row.stock_quantity) };
+      if (!values.department || !values.item_name || !Number.isInteger(values.stock_quantity) || values.stock_quantity < 0 || !stockCategories[values.category]) continue;
+      if (supabase) await supabase.from('purchase_stock').upsert(values, { onConflict: 'department,item_name' });
+      else { const current = localPurchaseStock.find((item) => item.department === values.department && item.item_name === values.item_name); if (current) Object.assign(current, values); else localPurchaseStock.push({ id: Date.now() + localPurchaseStock.length, ...values }); }
+    }
+  } catch (error) { return res.status(400).send(`Could not read Excel file: ${error.message}`); }
+  res.redirect('/admin/purchase/stock');
+});
+
+app.post('/admin/purchase/stock/:id/delete', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
+  if (supabase) { const { error } = await supabase.from('purchase_stock').delete().eq('id', req.params.id); if (error) return res.status(500).send(error.message); }
+  else { const index = localPurchaseStock.findIndex((item) => String(item.id) === req.params.id); if (index >= 0) localPurchaseStock.splice(index, 1); }
+  res.redirect('/admin/purchase/stock');
+});
+
+app.post('/admin/purchase/stock', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
+  const categories = Array.isArray(req.body.category) ? req.body.category : [req.body.category];
+  const departments = Array.isArray(req.body.department) ? req.body.department : [req.body.department];
+  const itemNames = Array.isArray(req.body.item_name) ? req.body.item_name : [req.body.item_name];
+  const quantities = Array.isArray(req.body.stock_quantity) ? req.body.stock_quantity : [req.body.stock_quantity];
+  for (const [index, itemName] of itemNames.entries()) {
+    const values = { category: String(categories[index] || 'misc').trim().toLowerCase(), department: String(departments[index] || '').trim(), item_name: String(itemName || '').trim(), stock_quantity: Number(quantities[index]) };
+    if (!values.department || !values.item_name || !Number.isInteger(values.stock_quantity) || values.stock_quantity < 0 || !stockCategories[values.category]) continue;
+    if (supabase) { const { error } = await supabase.from('purchase_stock').upsert(values, { onConflict: 'department,item_name' }); if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Run the purchase_stock SQL migration first.' : error.message); }
+    else { const current = localPurchaseStock.find((item) => item.department === values.department && item.item_name === values.item_name); if (current) Object.assign(current, values); else localPurchaseStock.push({ id: Date.now() + localPurchaseStock.length, ...values }); }
+  }
+  res.redirect('/admin/purchase');
+});
+
 app.get('/admin/purchase', requireLogin, async (req, res) => {
   const user = req.session.user;
-  if (user.role !== 'admin' && user.role !== 'head' && user.role !== 'principal') {
-    return res.status(403).send('Access required.');
+  if (!canManagePurchases(user)) {
+    return res.status(403).send('Purchase Officer or Clerk access required.');
   }
 
   const allRequests = await getPurchaseRequests();
-  const typeLabels = { local: 'Local Purchase', stationary: 'Purchase Stationary', cleaning: 'Cleaning Items' };
-  const typeIcons = { local: '🏪', stationary: '📦', cleaning: '🧹' };
+  const stock = await getPurchaseStock();
+  const typeLabels = { local: 'Local Purchase', stationary: 'Purchase Stationary', cleaning: 'Cleaning Items', electric: 'Electric Items' };
+  const typeIcons = { local: '🏪', stationary: '📦', cleaning: '🧹', electric: '⚡' };
   const priorityColors = { low: 'var(--muted)', medium: 'var(--ink)', high: 'var(--orange)', urgent: '#e74c3c' };
   const priorityBg = { low: '#f0f0f0', medium: '#e8e8e8', high: 'rgba(233,119,66,0.15)', urgent: 'rgba(231,76,60,0.15)' };
   const statusLabels = { pending: 'Pending', approved: 'Approved', rejected: 'Rejected' };
@@ -1252,10 +1399,17 @@ app.get('/admin/purchase', requireLogin, async (req, res) => {
     const createdDate = req.created_at ? new Date(req.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
     const createdTime = req.created_at ? new Date(req.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
     const totalPrice = (Number(req.quantity) * Number(req.unit_price)).toFixed(2);
+    const itemDetails = Array.isArray(req.item_details) && req.item_details.length
+      ? `<table class="mini-slip"><thead><tr><th>Sr.</th><th>Item</th><th>Admin Level</th><th>Nos</th><th>Stock</th>${req.purchase_type === 'stationary' ? '<th>Purpose</th>' : ''}</tr></thead><tbody>${req.item_details.map((item, index) => {
+          const stockRecord = stock.find((s) => s.item_name === item.item && s.department === req.department);
+          const stockQty = stockRecord ? Number(stockRecord.stock_quantity) : 0;
+          return `<tr><td>${index + 1}</td><td>${escapeHtml(item.item)}</td><td>${escapeHtml(item.admin_level || 'none')}</td><td>${escapeHtml(item.quantity)}</td><td>${stockQty > 0 ? stockQty : 'Out of Stock'}</td>${req.purchase_type === 'stationary' ? `<td>${escapeHtml(item.purpose || '')}</td>` : ''}</tr>`;
+        }).join('')}</tbody></table>`
+      : escapeHtml(req.item_name);
     return `<tr>
       <td>${typeIcons[req.purchase_type] || '📋'} ${escapeHtml(typeLabels[req.purchase_type] || req.purchase_type)}</td>
       <td>${escapeHtml(req.department)}</td>
-      <td>${escapeHtml(req.item_name)}<small>Qty: ${escapeHtml(req.quantity)} × ₹${escapeHtml(req.unit_price)} = ₹${totalPrice}</small></td>
+      <td>${itemDetails}<small>Total: ${escapeHtml(req.quantity)} × ₹${escapeHtml(req.unit_price)} = ₹${totalPrice}</small></td>
       <td>${escapeHtml(req.description)}<small>Vendor: ${escapeHtml(req.vendor || 'N/A')}</small></td>
       <td><span class="priority-badge" style="background:${priorityBg[req.priority] || '#f0f0f0'};color:${priorityColors[req.priority] || 'var(--ink)'}">${escapeHtml(req.priority.toUpperCase())}</span></td>
       <td>${escapeHtml(req.requester_name)}<small>${escapeHtml(req.requester_mobile)}</small><small>${escapeHtml(req.requester_email)}</small></td>
@@ -1283,19 +1437,19 @@ app.get('/admin/purchase', requireLogin, async (req, res) => {
     .reject-form input{width:150px;font-size:12px;padding:8px;border:1px solid var(--line);border-radius:4px}
     .reject-button{background:#e97742;color:#fff;border-color:#e97742}
     .priority-badge{display:inline-block;padding:4px 10px;border-radius:4px;font:600 11px Arial,sans-serif;letter-spacing:.05em}
-    .admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}
+    .admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.mini-slip{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:5px}.mini-slip th{background:var(--ink);color:var(--paper);padding:5px;font-size:9px}.mini-slip td{padding:5px;border-bottom:1px solid var(--line)}
   </style></head><body><main class="shell panel">
     <div class="college-heading"><h1>SVIT VASAD</h1></div>
     <header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Purchase<br><em>Approval Desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>
     <section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Purchase requests.</h2><p class="lede">Review and approve purchase requests from departments.</p><div class="admin-tools"><a class="page-nav" href="/admin">Back to Admin</a></div></section>
-    <section class="table-wrap"><table><thead><tr><th>Type</th><th>Department</th><th>Item</th><th>Details</th><th>Priority</th><th>Requester</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></section>
+    <section class="table-wrap"><table><thead><tr><th>Type</th><th>Department</th><th>Item</th><th>Details</th><th>Priority</th><th>Requester</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></section><section class="user-management"><div class="section-heading"><span>05</span><h3>Department stock</h3></div><p class="small-copy">Use the full register for category selection, multiple rows, Excel upload, and deletion.</p><div class="admin-tools"><a class="page-nav" href="/admin/purchase/stock">Open stock register ↗</a><a class="page-nav" href="/admin/purchase/stock/template">Download stock template</a></div>${stock.length ? `<div class="table-wrap"><table><thead><tr><th>Category</th><th>Department</th><th>Item</th><th>Available stock</th></tr></thead><tbody>${stock.map((item) => `<tr><td>${escapeHtml(item.category || 'misc')}</td><td>${escapeHtml(item.department)}</td><td>${escapeHtml(item.item_name)}</td><td>${escapeHtml(item.stock_quantity)}</td></tr>`).join('')}</tbody></table></div>` : ''}</section>
   </main></body></html>`);
 });
 
 app.post('/admin/purchase/:id/approve', requireLogin, async (req, res) => {
   const user = req.session.user;
-  if (user.role !== 'admin' && user.role !== 'head' && user.role !== 'principal') {
-    return res.status(403).send('Access required.');
+  if (!canManagePurchases(user)) {
+    return res.status(403).send('Purchase Officer or Clerk access required.');
   }
 
   let request = localPurchaseRequests.find((r) => String(r.id) === req.params.id);
@@ -1330,8 +1484,8 @@ app.post('/admin/purchase/:id/approve', requireLogin, async (req, res) => {
 
 app.post('/admin/purchase/:id/reject', requireLogin, async (req, res) => {
   const user = req.session.user;
-  if (user.role !== 'admin' && user.role !== 'head' && user.role !== 'principal') {
-    return res.status(403).send('Access required.');
+  if (!canManagePurchases(user)) {
+    return res.status(403).send('Purchase Officer or Clerk access required.');
   }
 
   let request = localPurchaseRequests.find((r) => String(r.id) === req.params.id);
