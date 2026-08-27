@@ -88,9 +88,14 @@
         <nav class="nav-buttons">
           <a href="/" class="nav-btn active"><span class="btn-icon">🏛️</span> Auditorium Permission</a>
           <a href="/maintenance" class="nav-btn"><span class="btn-icon">🔧</span> Maintenance Request</a>
+          <a href="/purchase/local" class="nav-btn purchase-nav"><span class="btn-icon">🏪</span> Local Purchase</a>
+          <a href="/purchase/stationary" class="nav-btn purchase-nav"><span class="btn-icon">📦</span> Purchase Stationary</a>
+          <a href="/purchase/cleaning" class="nav-btn purchase-nav"><span class="btn-icon">🧹</span> Cleaning Items</a>
+          <a href="/car-requests" class="nav-btn"><span class="btn-icon">🚗</span> Car Request</a>
+          <a href="/login" class="nav-btn"><span class="btn-icon">🔐</span> Sign in</a>
         </nav>
         <div class="stat">
-          <strong>02</strong>
+          <strong>04</strong>
           <span>Auditoriums available</span>
         </div>
       </aside>
@@ -140,6 +145,111 @@
           <div class="approval-note"><strong>Review path</strong><span>Department head → Electrician → Principal → Maintenance</span></div>
           <button type="submit">Send permission request <span>↗</span></button>
         </form>
+
+        <form class="request-form purchase-form" id="purchase-local" action="/purchase" method="post" style="display:none">
+          <input type="hidden" name="purchase_type" value="local">
+          <p class="eyebrow">Purchase form</p>
+          <h1>Local<br><em>purchase</em></h1>
+          <p class="lede">Submit a local purchase request for items procured from nearby vendors.</p>
+
+          <div class="section-heading"><span>01</span><h3>Item details</h3></div>
+          <div class="form-grid">
+            <label>Department<select name="department" required><option value="">Select department</option></select></label>
+            <label>Item name<input name="item_name" placeholder="e.g. Printer cartridges" required></label>
+            <label>Quantity<input name="quantity" type="number" min="1" step="1" placeholder="e.g. 10" required></label>
+            <label>Unit price (₹)<input name="unit_price" type="number" min="0" step="0.01" placeholder="e.g. 250.00"></label>
+            <label class="full-width">Description<textarea name="description" placeholder="Describe the item and purpose..."></textarea></label>
+            <label>Vendor name<input name="vendor" placeholder="e.g. Stationery Plus"></label>
+          </div>
+
+          <div class="section-heading"><span>02</span><h3>Your details</h3></div>
+          <div class="form-grid">
+            <label>Name<input name="requester_name" placeholder="Full name" required></label>
+            <label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label>
+            <label>Email address<input name="requester_email" type="email" placeholder="e.g. name@svitvasad.ac.in" required></label>
+            <div>
+              <label>Priority</label>
+              <div class="requester-type">
+                <label><input type="radio" name="priority" value="low"> Low</label>
+                <label><input type="radio" name="priority" value="medium" checked> Medium</label>
+                <label><input type="radio" name="priority" value="high"> High</label>
+                <label><input type="radio" name="priority" value="urgent"> Urgent</label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit">Submit local purchase request <span>↗</span></button>
+        </form>
+
+        <form class="request-form purchase-form" id="purchase-stationary" action="/purchase" method="post" style="display:none">
+          <input type="hidden" name="purchase_type" value="stationary">
+          <p class="eyebrow">Purchase form</p>
+          <h1>Purchase<br><em>stationary</em></h1>
+          <p class="lede">Submit a stationary purchase request for office and academic supplies.</p>
+
+          <div class="section-heading"><span>01</span><h3>Item details</h3></div>
+          <div class="form-grid">
+            <label>Department<select name="department" required><option value="">Select department</option></select></label>
+            <label>Item name<input name="item_name" placeholder="e.g. A4 paper reams" required></label>
+            <label>Quantity<input name="quantity" type="number" min="1" step="1" placeholder="e.g. 50" required></label>
+            <label>Unit price (₹)<input name="unit_price" type="number" min="0" step="0.01" placeholder="e.g. 120.00"></label>
+            <label class="full-width">Description<textarea name="description" placeholder="Describe the stationary items needed..."></textarea></label>
+            <label>Vendor name<input name="vendor" placeholder="e.g. Office Mart"></label>
+          </div>
+
+          <div class="section-heading"><span>02</span><h3>Your details</h3></div>
+          <div class="form-grid">
+            <label>Name<input name="requester_name" placeholder="Full name" required></label>
+            <label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label>
+            <label>Email address<input name="requester_email" type="email" placeholder="e.g. name@svitvasad.ac.in" required></label>
+            <div>
+              <label>Priority</label>
+              <div class="requester-type">
+                <label><input type="radio" name="priority" value="low"> Low</label>
+                <label><input type="radio" name="priority" value="medium" checked> Medium</label>
+                <label><input type="radio" name="priority" value="high"> High</label>
+                <label><input type="radio" name="priority" value="urgent"> Urgent</label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit">Submit stationary purchase request <span>↗</span></button>
+        </form>
+
+        <form class="request-form purchase-form" id="purchase-cleaning" action="/purchase" method="post" style="display:none">
+          <input type="hidden" name="purchase_type" value="cleaning">
+          <p class="eyebrow">Purchase form</p>
+          <h1>Cleaning<br><em>items</em></h1>
+          <p class="lede">Submit a cleaning items purchase request for hygiene and sanitation supplies.</p>
+
+          <div class="section-heading"><span>01</span><h3>Item details</h3></div>
+          <div class="form-grid">
+            <label>Department<select name="department" required><option value="">Select department</option></select></label>
+            <label>Item name<input name="item_name" placeholder="e.g. Floor cleaning solution" required></label>
+            <label>Quantity<input name="quantity" type="number" min="1" step="1" placeholder="e.g. 20" required></label>
+            <label>Unit price (₹)<input name="unit_price" type="number" min="0" step="0.01" placeholder="e.g. 150.00"></label>
+            <label class="full-width">Description<textarea name="description" placeholder="Describe the cleaning items needed..."></textarea></label>
+            <label>Vendor name<input name="vendor" placeholder="e.g. CleanPro Supplies"></label>
+          </div>
+
+          <div class="section-heading"><span>02</span><h3>Your details</h3></div>
+          <div class="form-grid">
+            <label>Name<input name="requester_name" placeholder="Full name" required></label>
+            <label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label>
+            <label>Email address<input name="requester_email" type="email" placeholder="e.g. name@svitvasad.ac.in" required></label>
+            <div>
+              <label>Priority</label>
+              <div class="requester-type">
+                <label><input type="radio" name="priority" value="low"> Low</label>
+                <label><input type="radio" name="priority" value="medium" checked> Medium</label>
+                <label><input type="radio" name="priority" value="high"> High</label>
+                <label><input type="radio" name="priority" value="urgent"> Urgent</label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit">Submit cleaning items request <span>↗</span></button>
+        </form>
       </section>
     </div>
 
@@ -156,6 +266,12 @@
     <h2 id="conflict-title">Already booked.</h2>
     <p id="conflict-message">This auditorium is already booked for the selected date and time. Please choose another slot.</p>
     <button type="button" id="close-conflict-popup">Choose another slot</button>
+  </dialog>
+
+  <dialog class="success-popup" id="purchase-success-popup" aria-labelledby="purchase-success-title">
+    <h2 id="purchase-success-title">Purchase request sent.</h2>
+    <p>Your purchase request was submitted successfully and is now waiting for review.</p>
+    <button type="button" id="close-purchase-success-popup">Close</button>
   </dialog>
 
   <script>
@@ -204,6 +320,14 @@
       const endTime = query.get('end_time');
       document.querySelector('#conflict-message').textContent = `${department} has already booked this auditorium on ${date}${startTime || endTime ? ` from ${startTime || '--:--'} to ${endTime || '--:--'}` : ''}. Please choose another slot.`;
       conflictPopup.showModal();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const purchaseSuccessPopup = document.querySelector('#purchase-success-popup');
+    const closePurchaseSuccessPopup = document.querySelector('#close-purchase-success-popup');
+    closePurchaseSuccessPopup.addEventListener('click', () => purchaseSuccessPopup.close());
+    if (query.get('purchase_submitted') === '1') {
+      purchaseSuccessPopup.showModal();
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   </script>
