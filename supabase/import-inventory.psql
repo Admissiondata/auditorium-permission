@@ -1,0 +1,20 @@
+\echo Importing inventory seed from inventory.tsv...
+create temp table inventory_stage (
+  college text not null default 'SVIT Vasad',
+  department text not null,
+  floor text not null default '',
+  office text not null default '',
+  item_category text not null default '',
+  item_name text not null,
+  quantity integer not null default 0
+) on commit drop;
+
+\copy inventory_stage (college, department, floor, office, item_category, item_name, quantity) from 'inventory.tsv' with (format csv, header true, delimiter E'\t');
+
+insert into public.inventory (college, department, floor, office, item_category, item_name, quantity)
+select college, department, floor, office, item_category, item_name, quantity
+from inventory_stage
+on conflict (college, department, floor, office, item_category, item_name) do nothing;
+
+\echo Done importing inventory.
+

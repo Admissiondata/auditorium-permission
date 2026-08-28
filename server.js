@@ -2,11 +2,71 @@ require('dotenv').config();
 
 const express = require('express');
 const session = require('express-session');
+const fs = require('node:fs');
 const path = require('node:path');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { createClient } = require('@supabase/supabase-js');
+
+class FileSessionStore extends session.Store {
+  constructor(options = {}) {
+    super();
+    this.file = options.file || path.join(__dirname, '.sessions.json');
+    this.sessions = new Map();
+    this.diskWritable = true;
+    this.loadFromDisk();
+  }
+  loadFromDisk() {
+    try {
+      if (!fs.existsSync(this.file)) return;
+      const raw = fs.readFileSync(this.file, 'utf8');
+      Object.entries(JSON.parse(raw)).forEach(([sid, record]) => this.sessions.set(String(sid), record));
+      this.saveToDisk();
+    } catch (error) {
+      this.diskWritable = false;
+    }
+  }
+  saveToDisk() {
+    if (!this.diskWritable) return;
+    try {
+      const payload = JSON.stringify(Object.fromEntries(this.sessions));
+      const tempFile = `${this.file}.${process.pid}.tmp`;
+      fs.writeFileSync(tempFile, payload, { mode: 0o600 });
+      fs.renameSync(tempFile, this.file);
+    } catch (error) {
+      this.diskWritable = false;
+    }
+  }
+  get(sid, callback) {
+    const record = this.sessions.get(String(sid));
+    if (!record) return setImmediate(() => callback(null, null));
+    if (record.expires && Date.now() > record.expires) {
+      this.destroy(sid, () => {});
+      return setImmediate(() => callback(null, null));
+    }
+    setImmediate(() => callback(null, record.session));
+  }
+  set(sid, sessionData, callback) {
+    this.sessions.set(String(sid), { session: sessionData, expires: sessionData && sessionData.cookie && (sessionData.cookie.expires instanceof Date || typeof sessionData.cookie.expires === 'number' || typeof sessionData.cookie.expires === 'string') ? new Date(sessionData.cookie.expires).getTime() : null });
+    this.saveToDisk();
+    if (callback) setImmediate(callback);
+  }
+  destroy(sid, callback) {
+    this.sessions.delete(String(sid));
+    this.saveToDisk();
+    if (callback) setImmediate(() => callback(null));
+  }
+  touch(sid, sessionData, callback) {
+    const record = this.sessions.get(String(sid));
+    if (record) {
+      record.session = sessionData;
+      record.expires = sessionData && sessionData.cookie && sessionData.cookie.expires ? new Date(sessionData.cookie.expires).getTime() : null;
+    }
+    this.saveToDisk();
+    if (callback) setImmediate(callback);
+  }
+}
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
@@ -58,13 +118,14 @@ const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMT
   : null;
 let senderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'nodalofficer@svitvasad.ac.in';
 
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100000 }));
+app.use(express.json({ limit: '10mb' }));
 app.use(session({
   secret: process.env.SESSION_SECRET || 'replace-this-session-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' }
+  store: new FileSessionStore(),
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
 app.get('/', renderRequestPage);
 app.get('/request', renderRequestPage);
@@ -175,6 +236,26 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (character
   '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
 }[character]));
 
+const defaultRoleGuide = [
+  ['1', 'Auditorium approval', 'Department Head (head) + Principal', 'Head approves department auditorium requests; Principal gives the final go-ahead.'],
+  ['2', 'Maintenance', 'Maintenance engineer + Electrician', 'Maintenance works on repair requests; Electrician handles electrical jobs.'],
+  ['3', 'Purchase', 'Purchase Officer + Purchase Clerk + Admin Officer', 'Officer approves purchases; Clerk keeps the stock register and inventory up to date.'],
+  ['4', 'Car requests', 'Chairman + Department staff', 'Chairman approves vehicle requests; staff submit official travel requests.'],
+  ['5', 'Inventory', 'Purchase Clerk / Admin Officer', 'Add, update, and export department-wise inventory.'],
+  ['', 'Everything', 'Admin', 'Master login — users & roles, approvals, email, stock, inventory, maintenance.']
+];
+let localRoleGuide = null;
+async function getRoleGuide() {
+  if (!supabase) return localRoleGuide ? localRoleGuide.map((row) => ({ ...row })) : defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+  const { data, error } = await supabase.from('role_guide').select('*').order('sort_order', { ascending: true }).order('id', { ascending: true });
+  if (error) {
+    if (error.code === 'PGRST205' || error.code === '42501') return defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+    throw error;
+  }
+  return data && data.length ? data : defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+}
+const roleGuideTable = (heading, editable = false, rows = []) => `<section class="user-management role-guide"><div class="section-heading"><h3>${escapeHtml(heading)}</h3></div><p class="small-copy">Who should be given which login.</p><div class="admin-tools">${editable ? '<a class="page-nav" href="/admin/role-guide">Edit guide rows ↗</a>' : ''}</div><div class="table-wrap"><table><thead><tr><th>#</th><th>Part</th><th>Give login to</th><th>What they can do</th></tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${escapeHtml(row.sort_order === null || row.sort_order === undefined ? '' : row.sort_order)}</td><td>${escapeHtml(row.part || '')}</td><td>${escapeHtml(row.give_login || '')}</td><td>${escapeHtml(row.what || '')}</td></tr>`).join('') : '<tr><td colspan="4">No guide rows yet.</td></tr>'}</tbody></table></div></section>`;
+
 function decorateAdminPage(page) {
   return page
     .replace('<body>', '<body><dialog id="action-popup"><h2 id="action-popup-title"></h2><p id="action-popup-message"></p><button type="button" onclick="this.closest(\'dialog\').close()">Close</button></dialog>')
@@ -199,29 +280,24 @@ app.post('/login', async (req, res) => {
 
 app.post('/logout', requireLogin, (req, res) => req.session.destroy(() => res.redirect('/login')));
 
-app.get('/admin/pages', requireLogin, (req, res) => {
+app.get('/admin/pages', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const guideRows = await getRoleGuide();
   const groups = [
     ['1', 'Auditorium approval', [['Approval requests', '/admin', 'Review and process auditorium permission requests.'], ['Auditoriums and approval route', '/admin/auditoriums/manage', 'Configure rooms, capacity, approval stages, and assigned officers.'], ['Departments and Heads', '/admin/departments', 'Maintain departments and assign each department Head.']]],
     ['2', 'Maintenance approval', [['Maintenance requests', '/admin/maintenance', 'Review and approve maintenance and repair submissions.'], ['Submit maintenance request', '/maintenance', 'Create a new maintenance request.']]],
-    ['3', 'Purchase', [['Stationery item', '/purchase/stationary', 'Submit stationery items and add extra line items.'], ['Local purchase', '/purchase/local', 'Submit a local purchase request.'], ['Cleaning item', '/purchase/cleaning', 'Submit cleaning item requests.'], ['Purchase approvals', '/admin/purchase', 'Review and approve purchase requests.'], ['Purchase approval roles', '/admin/purchase/settings', 'Assign approval roles and amount rules.'], ['Purchase Excel tools', '/admin/purchase/export', 'Download purchase data or an import template.']]],
-    ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Users and roles', '/admin', 'Create users and assign administrator and approval duties.']]]
+    ['3', 'Purchase', [['Stationery item', '/purchase/stationary', 'Submit stationery items and add extra line items.'], ['Local purchase', '/purchase/local', 'Submit a local purchase request.'], ['Cleaning item', '/purchase/cleaning', 'Submit cleaning item requests.'], ['Purchase approvals', '/admin/purchase', 'Review and approve purchase requests.'], ['Department stock', '/admin/purchase/stock', 'Department-wise stock register.'], ['Purchase approval roles', '/admin/purchase/settings', 'Assign approval roles and amount rules.'], ['Purchase Excel tools', '/admin/purchase/export', 'Download purchase data or an import template.']]],
+    ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Users and roles', '/admin', 'Create users and assign administrator and approval duties.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.']]],
+    ['5', 'Inventory', [['Inventory register', '/admin/inventory', 'Record assets department-wise, floor-wise, and office-wise.'], ['Inventory template', '/admin/inventory/template', 'Download an Excel template for importing inventory.'], ['Inventory Excel', '/admin/inventory/export', 'Download all inventory data in one Excel sheet.']]]
   ];
   const sections = groups.map(([number, title, pages]) => `<section class="directory-group"><div class="section-heading"><span>${number}</span><h2>${title}</h2></div><div class="page-directory">${pages.map(([pageTitle, href, description]) => `<a class="page-nav" href="${href}"><strong>${pageTitle}</strong><span>${description}</span> <b>↗</b></a>`).join('')}</div></section>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin pages</title><link rel="stylesheet" href="/styles.css"><style>.directory-group{border-top:1px solid var(--ink);padding:28px 0}.directory-group .section-heading{margin-bottom:18px}.directory-group .section-heading h2{font-size:26px;font-weight:400;margin:0}.page-directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.page-directory .page-nav{display:flex;flex-direction:column;gap:8px;height:100%;padding:20px;border:1px solid var(--line)}.page-directory .page-nav span{font:13px/1.4 Arial,sans-serif;color:var(--muted)}.page-directory .page-nav b{color:var(--orange)}@media(max-width:700px){.page-directory{grid-template-columns:1fr}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Admin<br><em>pages</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Administration</p><h2>Choose a workspace.</h2><p class="lede">Auditorium, maintenance, purchase, and vehicle workflows.</p></section>${sections}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin pages</title><link rel="stylesheet" href="/styles.css"><style>.directory-group{border-top:1px solid var(--ink);padding:28px 0}.directory-group .section-heading{margin-bottom:18px}.directory-group .section-heading h2{font-size:26px;font-weight:400;margin:0}.page-directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.page-directory .page-nav{display:flex;flex-direction:column;gap:8px;height:100%;padding:20px;border:1px solid var(--line)}.page-directory .page-nav span{font:13px/1.4 Arial,sans-serif;color:var(--muted)}.page-directory .page-nav b{color:var(--orange)}@media(max-width:700px){.page-directory{grid-template-columns:1fr}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Admin<br><em>pages</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Administration</p><h2>Choose a workspace.</h2><p class="lede">Auditorium, maintenance, purchase, and vehicle workflows.</p></section>${roleGuideTable('Login & role guide — who should get which login', true, guideRows)}${sections}</main></body></html>`);
 });
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/admin/') || req.path === '/admin/pages') return next();
   const send = res.send.bind(res);
   res.send = (body) => send(typeof body === 'string' ? body.replaceAll('href="/admin">Back to admin', 'href="/admin/pages">Back to admin pages').replaceAll('href="/admin">Back to Admin', 'href="/admin/pages">Back to admin pages') : body);
-  next();
-});
-
-app.use((req, res, next) => {
-  if (req.path !== '/admin') return next();
-  const send = res.send.bind(res);
-  res.send = (body) => send(typeof body === 'string' ? body.replace('<option value="department_user"', '<option value="admin_officer">Admin Officer</option><option value="purchase_officer">Purchase Officer</option><option value="purchase_clerk">Purchase Clerk</option><option value="chairman">Chairman</option><option value="department_user"') : body);
   next();
 });
 
@@ -235,6 +311,9 @@ app.use((req, res, next) => {
 app.get('/admin', requireLogin, async (req, res) => {
   const user = req.session.user;
   const auditoriumConfigs = await getAuditoriumConfigs();
+  let stock = [];
+  try { stock = await getPurchaseStock(); } catch (e) { console.error(`Stock fetch error: ${e.message}`); }
+  const guideRows = await getRoleGuide();
   let allRequests = requests;
   if (supabase) {
     const { data, error } = await supabase.from('requests').select('*').order('created_at', { ascending: false });
@@ -245,10 +324,10 @@ app.get('/admin', requireLogin, async (req, res) => {
     ? allRequests : allRequests.filter((request) => (user.departments || [user.department]).includes(request.department));
   const rows = visibleRequests.length ? visibleRequests.map((request) => requestRow(request, user, auditoriumConfigs)).join('') : `<tr><td colspan="${isAdmin(user) ? 9 : 5}">No requests yet.</td></tr>`;
   const visibleUsers = isAdmin(user) ? await getUsers() : [];
-  const userRows = isAdmin(user) ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role"><option value="sub_admin"${candidate.role === 'sub_admin' ? ' selected' : ''}>Sub administrator</option><option value="department_user"${candidate.role === 'department_user' ? ' selected' : ''}>Department user</option><option value="head"${candidate.role === 'head' ? ' selected' : ''}>Department head</option><option value="maintenance"${candidate.role === 'maintenance' ? ' selected' : ''}>Maintenance officer</option><option value="electrician"${candidate.role === 'electrician' ? ' selected' : ''}>Electrician</option><option value="principal"${candidate.role === 'principal' ? ' selected' : ''}>Principal</option></select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`).join('') : '';
+  const userRows = isAdmin(user) ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role">${['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal'].map((role) => `<option value="${role}"${candidate.role === role ? ' selected' : ''}>${role}</option>`).join('')}</select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`).join('') : '';
   const auditoriums = isAdmin(user) ? auditoriumConfigs : [];
   const requestHead = isAdmin(user) ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Maintenance</h3></div><p class="small-copy">Manage maintenance and repair requests.</p><div class="admin-tools"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section><section class="user-management"><div class="section-heading"><span>04</span><h3>Email settings</h3></div><p class="small-copy">Sender email address for all notifications.</p><form class="create-user" action="/admin/sender-email" method="post"><input name="sender_email" type="email" value="${escapeHtml(senderEmail)}" placeholder="sender@example.com" required><button type="submit">Update sender email</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section>${roleGuideTable('Login & role guide', isAdmin(user), guideRows)}<section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${canManagePurchases(user) ? `<section class="user-management"><div class="section-heading"><span>05</span><h3>Department stock</h3></div><p class="small-copy">Department-wise available stock for purchase items.</p><div class="admin-tools"><a class="page-nav" href="/admin/purchase">View Purchase Requests ↗</a><a class="page-nav" href="/admin/purchase/stock">Open Stock Register ↗</a></div>${stock.length ? `<div class="table-wrap"><table><thead><tr><th>Category</th><th>Department</th><th>Item</th><th>Available stock</th></tr></thead><tbody>${stock.map((item) => `<tr><td>${escapeHtml(item.category || 'misc')}</td><td>${escapeHtml(item.department)}</td><td>${escapeHtml(item.item_name)}</td><td>${escapeHtml(item.stock_quantity)}</td></tr>`).join('')}</tbody></table></div>` : ''}</section><section class="user-management"><div class="section-heading"><span>06</span><h3>Inventory</h3></div><p class="small-copy">One-campus asset register — department-wise, floor-wise, and office-wise.</p><div class="admin-tools"><a class="page-nav" href="/admin/inventory">Open Inventory Register ↗</a><a class="page-nav" href="/admin/inventory/template">Download Inventory template</a></div></section>` : ''}${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><span>01</span><h3>Users and roles</h3></div><p class="small-copy">Assign each user their role here — decide who gets which approval and management duty.</p>${userRows ? `<div class="table-wrap"><table><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${userRows}</tbody></table></div><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div>` : '<p class="small-copy">No users found.</p>'}</section><section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Maintenance</h3></div><p class="small-copy">Manage maintenance and repair requests.</p><div class="admin-tools"><a class="page-nav" href="/admin/maintenance">View Maintenance Requests ↗</a><a class="page-nav" href="/maintenance">Submit New Request ↗</a></div></section><section class="user-management"><div class="section-heading"><span>04</span><h3>Email settings</h3></div><p class="small-copy">Sender email address for all notifications.</p><form class="create-user" action="/admin/sender-email" method="post"><input name="sender_email" type="email" value="${escapeHtml(senderEmail)}" placeholder="sender@example.com" required><button type="submit">Update sender email</button></form></section>` : ''}</main></body></html>`);
 });
 
 app.post('/admin/auditoriums', requireLogin, async (req, res) => {
@@ -627,6 +706,51 @@ app.post('/admin/users/:id/delete', requireLogin, (req, res) => {
   if (index < 0) return res.status(404).send('User not found.');
   users.splice(index, 1);
   res.redirect('/admin');
+});
+
+app.get('/admin/role-guide', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const rows = await getRoleGuide();
+  const rowForms = rows.map((row) => `<tr><td><input name="sort_order[]" type="number" min="0" step="1" value="${escapeHtml(row.sort_order ?? '')}"></td><td><input name="part[]" type="text" value="${escapeHtml(row.part || '')}"></td><td><input name="give_login[]" type="text" value="${escapeHtml(row.give_login || '')}"></td><td><input name="what[]" type="text" value="${escapeHtml(row.what || '')}"></td><td class="actions-cell">${row.id ? `<input name="id[]" type="hidden" value="${escapeHtml(row.id)}"><form action="/admin/role-guide/${escapeHtml(row.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form>` : ''}</td></tr>`).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Role guide | Admin</title><link rel="stylesheet" href="/styles.css"><style>.role-guide-settings .user-management{padding:0}.role-guide-settings input{width:100%;box-sizing:border-box}input[name="sort_order[]"]{max-width:72px}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Role<br><em>guide</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Dynamic guide</p><h2>Who should get which login.</h2><p class="lede">Edit the rows — they show on the main page near Sign out. No fixed values.</p></section><section class="user-management role-guide-settings"><div class="admin-tools"><a class="page-nav" href="/admin/pages">Back to admin pages</a><button class="small-button" form="role-guide-form" type="submit">Save all rows</button><button class="small-button" type="button" onclick="addRow()">+ Add row</button></div><form id="role-guide-form" action="/admin/role-guide" method="post"><div class="table-wrap"><table><thead><tr><th>#</th><th>Part</th><th>Give login to</th><th>What they can do</th><th></th></tr></thead><tbody>${rowForms || '<tr><td colspan="5">No guide rows yet.</td></tr>'}</tbody></table></div></form></section></main><script>function addRow(){const tbody=document.querySelector('#role-guide-form tbody');const tr=document.createElement('tr');tr.innerHTML='<td><input name="sort_order[]" type="number" min="0" step="1"></td><td><input name="part[]" type="text"></td><td><input name="give_login[]" type="text"></td><td><input name="what[]" type="text"></td><td class="actions-cell"></td>';tbody.appendChild(tr);}</script></body></html>`);
+});
+
+app.post('/admin/role-guide', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const ids = Array.isArray(req.body.id) ? req.body.id : [req.body.id];
+  const orders = Array.isArray(req.body.sort_order) ? req.body.sort_order : [req.body.sort_order];
+  const parts = Array.isArray(req.body.part) ? req.body.part : [req.body.part];
+  const gives = Array.isArray(req.body.give_login) ? req.body.give_login : [req.body.give_login];
+  const whats = Array.isArray(req.body.what) ? req.body.what : [req.body.what];
+  const length = Math.max(ids.length, orders.length, parts.length, gives.length, whats.length);
+  if (supabase) {
+    for (let index = 0; index < length; index += 1) {
+      const part = String(parts[index] || '').trim();
+      const giveLogin = String(gives[index] || '').trim();
+      const what = String(whats[index] || '').trim();
+      if (!part && !giveLogin && !what) continue;
+      const payload = { part, give_login: giveLogin, what, sort_order: Number(orders[index]) || 0 };
+      const rowId = Number(ids[index]);
+      if (rowId > 0) await supabase.from('role_guide').update(payload).eq('id', rowId);
+      else await supabase.from('role_guide').insert([payload]);
+    }
+  } else {
+    localRoleGuide = Array.from({ length }, (_, index) => {
+      const part = String(parts[index] || '').trim();
+      const giveLogin = String(gives[index] || '').trim();
+      const what = String(whats[index] || '').trim();
+      if (!part && !giveLogin && !what) return null;
+      return { id: Number(ids[index]) || 1000 + index, part, give_login: giveLogin, what, sort_order: Number(orders[index]) || 0 };
+    }).filter(Boolean);
+  }
+  res.redirect('/admin/role-guide');
+});
+
+app.post('/admin/role-guide/:id/delete', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (supabase) await supabase.from('role_guide').delete().eq('id', req.params.id);
+  else if (localRoleGuide) localRoleGuide = localRoleGuide.filter((row) => String(row.id) !== req.params.id);
+  res.redirect('/admin/role-guide');
 });
 
 app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
@@ -1152,7 +1276,34 @@ async function getPurchaseStock() {
   return data || [];
 }
 
-const canManagePurchases = (user) => isAdmin(user) || user?.role === 'purchase_officer' || user?.role === 'purchase_clerk';
+const localInventory = [];
+async function getInventory() {
+  if (!supabase) return localInventory;
+  const { data, error } = await supabase.from('inventory').select('*').order('college').order('department').order('floor').order('office').order('item_category').order('item_name');
+  if (error) {
+    if (error.code === 'PGRST205' || error.code === '42501') return localInventory;
+    throw error;
+  }
+  return data || [];
+}
+
+const inventoryField = (body, name, index) => String((Array.isArray(body[name]) ? (body[name][index] ?? '') : index === 0 ? (body[name] ?? '') : '') ?? '').trim();
+const inventoryValues = (body, index = 0) => ({
+  college: inventoryField(body, 'college', index) || 'SVIT Vasad',
+  department: inventoryField(body, 'department', index),
+  floor: inventoryField(body, 'floor', index),
+  office: inventoryField(body, 'office', index),
+  item_category: inventoryField(body, 'item_category', index),
+  item_name: inventoryField(body, 'item_name', index),
+  quantity: Number(inventoryField(body, 'quantity', index)) || 0
+});
+const upsertInventoryLocal = (values) => {
+  const current = localInventory.find((item) => item.college === values.college && item.department === values.department && item.floor === values.floor && item.office === values.office && item.item_category === values.item_category && item.item_name === values.item_name);
+  if (current) Object.assign(current, values);
+  else localInventory.push({ id: Date.now() + localInventory.length, created_at: new Date().toISOString(), ...values });
+};
+
+const canManagePurchases = (user) => isAdmin(user) || user?.role === 'purchase_officer' || user?.role === 'purchase_clerk' || user?.role === 'admin_officer';
 
 app.get('/admin/purchase/settings', requireLogin, (req, res) => {
   if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase Officer or Clerk access required.');
@@ -1321,7 +1472,26 @@ app.get('/admin/purchase/stock', requireLogin, async (req, res) => {
   const categoryOptions = Object.keys(stockCategories).map((category) => `<option value="${category}">${category[0].toUpperCase() + category.slice(1)} Items</option>`).join('');
   const catalogJson = JSON.stringify(stockCategories);
   const rows = stock.length ? stock.map((item) => `<tr><td>${escapeHtml(item.category || 'misc')}</td><td>${escapeHtml(item.department)}</td><td>${escapeHtml(item.item_name)}</td><td>${escapeHtml(item.stock_quantity)}</td><td><form class="stock-inline" action="/admin/purchase/stock/${item.id}/delete" method="post"><button class="small-button reject-button" type="submit">Delete</button></form></td></tr>`).join('') : '<tr><td colspan="5">No stock records yet.</td></tr>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stock register | Purchase</title><link rel="stylesheet" href="/styles.css"><style>.stock-register{margin-top:30px}.stock-form{display:grid;gap:10px}.stock-row{display:grid;grid-template-columns:1fr 1fr 1.5fr 1fr auto;gap:10px;align-items:end}.stock-row select,.stock-row input{min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}.stock-actions{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stock-inline{margin:0}.register-table{margin-top:25px}@media(max-width:800px){.stock-row{grid-template-columns:1fr 1fr}.stock-row button{grid-column:span 2}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Stock<br><em>register</em></h1></div><a class="page-nav" href="/admin/purchase">Back to purchase desk</a></header><section class="panel-intro"><p class="eyebrow">Inventory control</p><h2>Department-wise stock register.</h2><p class="lede">Save available stock for stationery, cleaning, electrical, plumbing, and miscellaneous items.</p></section><section class="stock-register"><div class="section-heading"><span>01</span><h3>Add or update stock</h3></div><form class="stock-form" action="/admin/purchase/stock" method="post"><div class="stock-row"><select class="stock-category" name="category[]" required>${categoryOptions}</select><input name="department[]" placeholder="Department" required><select class="stock-item" name="item_name[]" required></select><input name="stock_quantity[]" type="number" min="0" placeholder="Quantity" required><button class="remove-stock" type="button" aria-label="Remove stock row" hidden>×</button></div><button class="add-slot" id="add-stock" type="button">+ Add stock row</button><button type="submit">Save stock</button></form><div class="stock-actions"><a class="page-nav" href="/admin/purchase/stock/template">Download stock template</a><form action="/admin/purchase/stock/upload" method="post" enctype="multipart/form-data"><input type="file" name="stock_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div><div class="table-wrap register-table"><table><thead><tr><th>Category</th><th>Department</th><th>Item</th><th>Available stock</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section></main><script>const stockCategories=${catalogJson};const stockList=document.querySelector('.stock-form');const stockRow=stockList.querySelector('.stock-row');function updateStockItems(row){const select=row.querySelector('.stock-category');const item=row.querySelector('.stock-item');item.innerHTML='<option value="">Select item</option>'+stockCategories[select.value].map((name)=>'<option value="'+name+'">'+name+'</option>').join('');}function updateStockRows(){const rows=stockList.querySelectorAll('.stock-row');rows.forEach((row)=>{row.querySelector('.remove-stock').hidden=rows.length===1;updateStockItems(row);});}stockList.querySelector('#add-stock').addEventListener('click',()=>{const row=stockRow.cloneNode(true);row.querySelectorAll('input').forEach((input)=>input.value='');row.querySelector('.stock-category').selectedIndex=0;row.querySelector('.remove-stock').hidden=false;row.querySelector('.remove-stock').addEventListener('click',()=>{row.remove();updateStockRows();});stockList.insertBefore(row,stockList.querySelector('#add-stock'));updateStockRows();});updateStockRows();</script></body></html>`);
+  const requestedItemMap = new Map();
+  for (const purchaseRequest of await getPurchaseRequests()) {
+    const requestedEntries = Array.isArray(purchaseRequest.item_details) && purchaseRequest.item_details.length
+      ? purchaseRequest.item_details.map((detail) => ({ item: detail.item, quantity: detail.quantity }))
+      : [{ item: purchaseRequest.item_name, quantity: purchaseRequest.quantity }];
+    for (const entry of requestedEntries) {
+      const key = `${purchaseRequest.department}::${entry.item}`;
+      const existing = requestedItemMap.get(key) || { department: purchaseRequest.department, item: entry.item, requested: 0 };
+      existing.requested += Number(entry.quantity) || 0;
+      requestedItemMap.set(key, existing);
+    }
+  }
+  const requestedRows = [...requestedItemMap.values()].map((entry) => {
+    const stockRecord = stock.find((s) => s.department === entry.department && s.item_name === entry.item);
+    const available = stockRecord ? Number(stockRecord.stock_quantity) : 0;
+    const status = available === 0 ? 'Out of stock' : available >= entry.requested ? 'In stock' : 'Short';
+    const statusColor = status === 'In stock' ? '#2a7f52' : status === 'Short' ? 'var(--orange)' : '#e74c3c';
+    return `<tr><td>${escapeHtml(entry.department)}</td><td>${escapeHtml(entry.item)}</td><td>${escapeHtml((stockRecord && stockRecord.category) || 'misc')}</td><td>${escapeHtml(entry.requested)}</td><td>${escapeHtml(available)}</td><td><span class="req-stock-status" style="color:${statusColor}">${status}</span></td></tr>`;
+  }).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Stock register | Purchase</title><link rel="stylesheet" href="/styles.css"><style>.stock-register{margin-top:30px}.stock-form{display:grid;gap:10px}.stock-row{display:grid;grid-template-columns:1fr 1fr 1.5fr 1fr auto;gap:10px;align-items:end}.stock-row select,.stock-row input{min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}.stock-actions{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.stock-inline{margin:0}.register-table{margin-top:25px}.req-stock-status{font-weight:600}@media(max-width:800px){.stock-row{grid-template-columns:1fr 1fr}.stock-row button{grid-column:span 2}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Stock<br><em>register</em></h1></div><a class="page-nav" href="/admin/purchase">Back to purchase desk</a></header><section class="panel-intro"><p class="eyebrow">Inventory control</p><h2>Department-wise stock register.</h2><p class="lede">Save available stock for stationery, cleaning, electrical, plumbing, and miscellaneous items.</p></section><section class="stock-register"><div class="section-heading"><span>01</span><h3>Add or update stock</h3></div><form class="stock-form" action="/admin/purchase/stock" method="post"><div class="stock-row"><select class="stock-category" name="category[]" required>${categoryOptions}</select><input name="department[]" placeholder="Department" required><select class="stock-item" name="item_name[]" required></select><input name="stock_quantity[]" type="number" min="0" placeholder="Quantity" required><button class="remove-stock" type="button" aria-label="Remove stock row" hidden>×</button></div><button class="add-slot" id="add-stock" type="button">+ Add stock row</button><button type="submit">Save stock</button></form><div class="stock-actions"><a class="page-nav" href="/admin/purchase/stock/template">Download stock template</a><form action="/admin/purchase/stock/upload" method="post" enctype="multipart/form-data"><input type="file" name="stock_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div><div class="table-wrap register-table"><table><thead><tr><th>Category</th><th>Department</th><th>Item</th><th>Available stock</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></section><section class="stock-register" style="margin-top:38px"><div class="section-heading"><span>02</span><h3>Department stock for requested items</h3></div><p class="small-copy">Available stock against each item that departments have requested, per department.</p><div class="table-wrap register-table"><table><thead><tr><th>Department</th><th>Item</th><th>Category</th><th>Requested</th><th>Available</th><th>Status</th></tr></thead><tbody>${requestedRows.length ? requestedRows : '<tr><td colspan="6">No requested items yet.</td></tr>'}</tbody></table></div></section></main><script>const stockCategories=${catalogJson};const stockList=document.querySelector('.stock-form');const stockRow=stockList.querySelector('.stock-row');function updateStockItems(row){const select=row.querySelector('.stock-category');const item=row.querySelector('.stock-item');item.innerHTML='<option value="">Select item</option>'+stockCategories[select.value].map((name)=>'<option value="'+name+'">'+name+'</option>').join('');}function updateStockRows(){const rows=stockList.querySelectorAll('.stock-row');rows.forEach((row)=>{row.querySelector('.remove-stock').hidden=rows.length===1;updateStockItems(row);});}stockList.querySelector('#add-stock').addEventListener('click',()=>{const row=stockRow.cloneNode(true);row.querySelectorAll('input').forEach((input)=>input.value='');row.querySelector('.stock-category').selectedIndex=0;row.querySelector('.remove-stock').hidden=false;row.querySelector('.remove-stock').addEventListener('click',()=>{row.remove();updateStockRows();});stockList.insertBefore(row,stockList.querySelector('#add-stock'));updateStockRows();});updateStockRows();stockList.addEventListener("change",(e)=>{if(e.target.classList.contains("stock-category")){updateStockItems(e.target.closest(".stock-row"));}});</script></body></html>`);
 });
 
 app.get('/admin/purchase/stock/template', requireLogin, (req, res) => {
@@ -1532,6 +1702,157 @@ app.post('/admin/purchase/:id/delete', requireLogin, async (req, res) => {
     if (index >= 0) localPurchaseRequests.splice(index, 1);
   }
   res.redirect('/admin/purchase');
+});
+
+app.get('/admin/inventory', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const inventory = await getInventory();
+  const departments = await getDepartments();
+  const departmentDataList = departments.map((department) => `<option value="${escapeHtml(department.name)}">`).join('');
+  const searchQuery = String(req.query.q || '').trim().toLowerCase();
+  const pageSize = 100;
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const filtered = searchQuery ? inventory.filter((entry) => [entry.college, entry.department, entry.floor, entry.office, entry.item_category, entry.item_name].some((value) => String(value || '').toLowerCase().includes(searchQuery))) : inventory;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const pageRecords = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const linkParams = new URLSearchParams({ q: searchQuery });
+  const rows = pageRecords.length ? pageRecords.map((entry) => `<tr><td colspan="8"><form class="inv-edit" action="/admin/inventory/${entry.id}" method="post"><input name="college" value="${escapeHtml(entry.college)}" aria-label="College" required><input name="department" value="${escapeHtml(entry.department)}" aria-label="Department" required><input name="floor" value="${escapeHtml(entry.floor)}" aria-label="Floor"><input name="office" value="${escapeHtml(entry.office)}" aria-label="Office"><input name="item_category" value="${escapeHtml(entry.item_category)}" aria-label="Item category"><input name="item_name" value="${escapeHtml(entry.item_name)}" aria-label="Item" required><input name="quantity" type="number" min="0" value="${escapeHtml(entry.quantity ?? 0)}" aria-label="Quantity" required><button class="small-button" type="submit">Save</button></form><form class="stock-inline" action="/admin/inventory/${entry.id}/delete" method="post"><button class="small-button reject-button" type="submit">Delete</button></form></td></tr>`).join('') : '<tr><td colspan="8">No inventory records yet.</td></tr>';
+  const pager = `<nav class="inv-pager"><span>Showing ${pageRecords.length} of ${filtered.length} records</span>${page > 1 ? `<a class="page-nav" href="/admin/inventory?page=${page - 1}&${linkParams}">« Previous</a>` : ''}<span class="inv-pagecount">Page ${page} of ${totalPages}</span>${page < totalPages ? `<a class="page-nav" href="/admin/inventory?page=${page + 1}&${linkParams}">Next »</a>` : ''}</nav>`;
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Inventory register</title><link rel="stylesheet" href="/styles.css"><style>.inventory-register{margin-top:30px}.inv-row{display:grid;grid-template-columns:1fr 1.2fr .8fr 1fr 1.2fr 1.4fr .7fr auto;gap:8px;align-items:end}.inv-edit{display:grid;grid-template-columns:1fr 1.2fr .8fr 1fr 1.2fr 1.4fr .7fr auto;gap:8px;align-items:center}.inv-row input,.inv-edit input{min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}.stock-inline{margin:0}.inv-tools{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}.register-table{margin-top:25px}.inv-total{font-weight:700}.inv-search{display:flex;gap:10px;margin:18px 0 12px}.inv-search input{flex:1;min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}.inv-pager{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:14px 0}.inv-pager span{font-size:12px;color:var(--muted)}.inv-pagecount{font-weight:700;color:var(--ink)}.inv-filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin:16px 0}.inv-filters select{min-width:0;padding:11px;border:1px solid var(--line);background:transparent;font:13px Arial}@media(max-width:900px){.inv-row,.inv-edit{grid-template-columns:1fr 1fr}.inv-row button,.inv-edit button{grid-column:span 2}.inv-filters{grid-template-columns:1fr}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Inventory<br><em>register</em></h1></div><a class="page-nav" href="/admin/pages">Back to admin pages</a></header><section class="panel-intro"><p class="eyebrow">Asset control</p><h2>One-campus inventory register.</h2><p class="lede">Departments, floors, offices and rooms with item quantities — the SVIT inventory format.</p></section><section class="inventory-register"><div class="section-heading"><span>01</span><h3>Add inventory rows</h3></div><form class="stock-form" action="/admin/inventory" method="post"><div class="inv-row"><input class="inv-college" name="college[]" value="SVIT Vasad" placeholder="College" required><input name="department[]" list="inv-departments" placeholder="Department" required><input name="floor[]" placeholder="Floor"><input name="office[]" placeholder="Office / Room"><input name="item_category[]" placeholder="Item category"><input name="item_name[]" placeholder="Item name" required><input name="quantity[]" type="number" min="0" placeholder="Qty" required><button class="remove-stock" type="button" aria-label="Remove inventory row" hidden>×</button></div><button class="add-slot" id="add-inventory" type="button">+ Add row</button><button type="submit">Save all</button></form><datalist id="inv-departments">${departmentDataList}</datalist><div class="inv-tools"><a class="page-nav" href="/admin/inventory/export">Download Excel (all data) ↗</a><a class="page-nav" href="/admin/inventory/template">Download template ↗</a><form action="/admin/inventory/upload" method="post" enctype="multipart/form-data"><input type="file" name="inventory_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div><form class="inv-search" action="/admin/inventory" method="get"><input name="q" value="${escapeHtml(req.query.q || '')}" placeholder="Search college, department, floor, office, item..." aria-label="Search inventory"><button type="submit">Search</button><a class="page-nav" href="/admin/inventory">Clear</a></form><div class="table-wrap register-table"><table><thead><tr><th>College</th><th>Department</th><th>Floor</th><th>Office</th><th>Item category</th><th>Item</th><th>Qty</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>${pager}</section><section class="inventory-register"><div class="section-heading"><span>02</span><h3>Branch-wise Excel export</h3></div><p class="small-copy">Filter by college, department (branch), floor, office, and item — item totals cover all campuses.</p><div class="inv-filters"><select id="f-college" aria-label="College"><option value="">All colleges</option></select><select id="f-department" aria-label="Department"><option value="">All departments</option></select><select id="f-floor" aria-label="Floor"><option value="">All floors</option></select><select id="f-office" aria-label="Office"><option value="">All offices</option></select><select id="f-item" aria-label="Item"><option value="">All items</option></select></div><a class="page-nav" id="export-advanced" href="/admin/inventory/export/advanced">Download branch-wise Excel ↗</a></section></main><script>const inventoryList=document.querySelector('.stock-form');const inventoryRow=inventoryList.querySelector('.inv-row');function updateInventoryRows(){const rows=inventoryList.querySelectorAll('.inv-row');rows.forEach((row)=>{row.querySelector('.remove-stock').hidden=rows.length===1;});}inventoryList.querySelector('#add-inventory').addEventListener('click',()=>{const row=inventoryRow.cloneNode(true);row.querySelectorAll('input').forEach((input)=>{input.value='';});row.querySelector('.inv-college').value='SVIT Vasad';row.querySelector('.remove-stock').hidden=false;row.querySelector('.remove-stock').addEventListener('click',()=>{row.remove();updateInventoryRows();});inventoryList.insertBefore(row,inventoryList.querySelector('#add-inventory'));updateInventoryRows();});updateInventoryRows();const filterEl=(id)=>document.getElementById(id);const filterBlank=(el)=>{const blank=document.createElement('option');blank.value='';blank.textContent=el.id==='f-college'?'All colleges':el.id==='f-department'?'All departments':el.id==='f-floor'?'All floors':el.id==='f-office'?'All offices':'All items';return blank;};const setFilterOptions=(el,list)=>{const current=el.value;el.innerHTML='';el.appendChild(filterBlank(el));for(const value of list){const option=document.createElement('option');option.value=value;option.textContent=value;el.appendChild(option);}if([...el.options].some((option)=>option.value===current))el.value=current;};const refreshFilters=()=>{const params=new URLSearchParams({college:filterEl('f-college').value,department:filterEl('f-department').value,floor:filterEl('f-floor').value,office:filterEl('f-office').value,item:filterEl('f-item').value});fetch('/admin/inventory/options?'+params.toString()).then((response)=>response.json()).then((data)=>{setFilterOptions(filterEl('f-college'),data.college);setFilterOptions(filterEl('f-department'),data.department);setFilterOptions(filterEl('f-floor'),data.floor);setFilterOptions(filterEl('f-office'),data.office);setFilterOptions(filterEl('f-item'),data.item);const href=new URL('/admin/inventory/export/advanced',location.origin);const linkParams=new URLSearchParams({college:filterEl('f-college').value,department:filterEl('f-department').value,floor:filterEl('f-floor').value,office:filterEl('f-office').value,item:filterEl('f-item').value});href.search=linkParams.toString();filterEl('export-advanced').setAttribute('href',href.pathname+href.search);});};['f-college','f-department','f-floor','f-office','f-item'].forEach((id)=>filterEl(id).addEventListener('change',refreshFilters));refreshFilters();</script></body></html>`);
+});
+
+app.get('/admin/inventory/export', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const inventory = await getInventory();
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet(inventory.map((entry) => ({ College: entry.college || 'SVIT Vasad', Department: entry.department || '', Floor: entry.floor || '', Office: entry.office || '', 'Item Category': entry.item_category || '', Item: entry.item_name || '', Quantity: entry.quantity ?? 0 })));
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Inventory');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('inventory.xlsx').send(buffer);
+});
+
+app.get('/admin/inventory/template', requireLogin, (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet([{ College: 'SVIT Vasad', Department: 'Mechanical', Floor: 'Ground Floor', Office: 'MSM lab', 'Item Category': 'Tables', Item: '(a) Reading Tables', Quantity: 4 }]);
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Inventory');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('inventory-template.xlsx').send(buffer);
+});
+
+app.post('/admin/inventory/upload', requireLogin, upload.single('inventory_file'), async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  if (!req.file) return res.status(400).send('Please upload an Excel file.');
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: '' });
+    for (const row of rows) {
+      const values = {
+        college: String(row.College || row.college || 'SVIT Vasad').trim(),
+        department: String(row.Department || row.department || '').trim(),
+        floor: String(row.Floor || row.floor || '').trim(),
+        office: String(row.Office || row.office || '').trim(),
+        item_category: String(row['Item Category'] || row.Category || row.category || '').trim(),
+        item_name: String(row.Item || row['Item Name'] || row.item_name || '').trim(),
+        quantity: Number(row.Quantity ?? row.qty ?? row.quantity ?? 0) || 0
+      };
+      if (!values.department || !values.item_name || !Number.isInteger(values.quantity) || values.quantity < 0) continue;
+      if (supabase) await supabase.from('inventory').upsert(values, { onConflict: 'college,department,floor,office,item_category,item_name' });
+      else upsertInventoryLocal(values);
+    }
+  } catch (error) { return res.status(400).send(`Could not read Excel file: ${error.message}`); }
+  res.redirect('/admin/inventory');
+});
+
+app.post('/admin/inventory', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const itemNames = Array.isArray(req.body.item_name) ? req.body.item_name : [req.body.item_name];
+  for (const [index, itemName] of itemNames.entries()) {
+    const values = inventoryValues(req.body, index);
+    if (!values.department || !values.item_name || !Number.isInteger(values.quantity) || values.quantity < 0) continue;
+    if (supabase) {
+      const { error } = await supabase.from('inventory').upsert(values, { onConflict: 'college,department,floor,office,item_category,item_name' });
+      if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Run the inventory SQL migration first.' : error.message);
+    } else {
+      upsertInventoryLocal(values);
+    }
+  }
+  res.redirect('/admin/inventory');
+});
+
+app.post('/admin/inventory/:id', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const values = inventoryValues(req.body);
+  if (!values.department || !values.item_name || !Number.isInteger(values.quantity) || values.quantity < 0) return res.status(400).send('All required fields must be filled correctly.');
+  if (supabase) {
+    const { error } = await supabase.from('inventory').update(values).eq('id', req.params.id);
+    if (error) return res.status(500).send(error.message);
+  } else {
+    const current = localInventory.find((item) => String(item.id) === req.params.id);
+    if (current) Object.assign(current, values);
+  }
+  res.redirect('/admin/inventory');
+});
+
+app.post('/admin/inventory/:id/delete', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  if (supabase) { const { error } = await supabase.from('inventory').delete().eq('id', req.params.id); if (error) return res.status(500).send(error.message); }
+  else { const index = localInventory.findIndex((item) => String(item.id) === req.params.id); if (index >= 0) localInventory.splice(index, 1); }
+  res.redirect('/admin/inventory');
+});
+
+const inventoryMatches = (entry, filters = {}) => {
+  const match = (value, expected) => {
+    const query = String(expected || '').trim();
+    return !query || String(value || '') === query;
+  };
+  return match(entry.college, filters.college)
+    && match(entry.department, filters.department)
+    && match(entry.floor, filters.floor)
+    && match(entry.office, filters.office)
+    && match(entry.item_name, filters.item);
+};
+
+app.get('/admin/inventory/options', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const inventory = await getInventory();
+  const filtered = inventory.filter((entry) => inventoryMatches(entry, req.query || {}));
+  const distinct = (list) => [...new Set(list.map((value) => String(value).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  res.json({
+    college: distinct(inventory.map((entry) => entry.college)),
+    department: distinct(inventory.map((entry) => entry.department)),
+    floor: distinct(filtered.map((entry) => entry.floor)),
+    office: distinct(filtered.map((entry) => entry.office)),
+    item: distinct(filtered.map((entry) => entry.item_name))
+  });
+});
+
+app.get('/admin/inventory/export/advanced', requireLogin, async (req, res) => {
+  if (!canManagePurchases(req.session.user)) return res.status(403).send('Purchase manager access required.');
+  const inventory = await getInventory();
+  const filtered = inventory.filter((entry) => inventoryMatches(entry, req.query || {}));
+  const workbook = XLSX.utils.book_new();
+  const detailRows = filtered.map((entry) => ({ College: entry.college || 'SVIT Vasad', Department: entry.department || '', Floor: entry.floor || '', Office: entry.office || '', 'Item Category': entry.item_category || '', Item: entry.item_name || '', Quantity: entry.quantity ?? 0 }));
+  const detailSheet = XLSX.utils.json_to_sheet(detailRows);
+  XLSX.utils.book_append_sheet(workbook, detailSheet, 'Inventory');
+  const totals = new Map();
+  let grandTotal = 0;
+  for (const entry of filtered) {
+    const key = `${entry.department}|${entry.item_category}|${entry.item_name}`;
+    const current = totals.get(key) || { Department: entry.department || '', 'Item Category': entry.item_category || '', Item: entry.item_name || '', Quantity: 0 };
+    current.Quantity += entry.quantity ?? 0;
+    totals.set(key, current);
+    grandTotal += entry.quantity ?? 0;
+  }
+  const totalRows = [...totals.values()].sort((a, b) => a.Department.localeCompare(b.Department) || a.Item.localeCompare(b.Item));
+  totalRows.push({ Department: 'ALL DEPARTMENTS TOTAL (ALL CAMPUS)', 'Item Category': '', Item: '', Quantity: grandTotal });
+  const totalsSheet = XLSX.utils.json_to_sheet(totalRows);
+  const setWidths = (sheet, widths) => { sheet['!cols'] = widths.map((wch) => ({ wch })); };
+  setWidths(detailSheet, [16, 22, 14, 22, 18, 28, 10]);
+  setWidths(totalsSheet, [34, 18, 28, 12]);
+  XLSX.utils.book_append_sheet(workbook, totalsSheet, 'Item Totals');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('inventory-branch.xlsx').send(buffer);
 });
 
 app.listen(port, () => {
