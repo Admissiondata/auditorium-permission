@@ -444,11 +444,11 @@ app.get('/admin/pages', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const guideRows = await getRoleGuide();
   const groups = [
-    ['1', 'Auditorium approval', [['Approval requests', '/admin', 'Review and process auditorium permission requests.'], ['Auditoriums and approval route', '/admin/auditoriums/manage', 'Configure rooms, capacity, approval stages, and assigned officers.'], ['Departments and Heads', '/admin/departments', 'Maintain departments and assign each department Head.']]],
+    ['1', 'Auditorium approval', [['Approval requests', '/admin', 'Review and process auditorium permission requests.'], ['Auditoriums and approval route', '/admin/auditoriums/manage', 'Configure rooms, capacity, approval stages, and assigned officers.']]],
     ['2', 'Maintenance approval', [['Maintenance requests', '/admin/maintenance', 'Review and approve maintenance and repair submissions.'], ['Submit maintenance request', '/maintenance', 'Create a new maintenance request.']]],
     ['3', 'Purchase', [['Stationery item', '/purchase/stationary', 'Submit stationery items and add extra line items.'], ['Local purchase', '/purchase/local', 'Submit a local purchase request.'], ['Cleaning item', '/purchase/cleaning', 'Submit cleaning item requests.'], ['Purchase approvals', '/admin/purchase', 'Review and approve purchase requests.'], ['Approval workflow builder', '/admin/workflows', 'Configure amount bands and approval role routes per module.'], ['Approval log', '/admin/approvals-log', 'Audit trail of every approval action.'], ['Department stock', '/admin/purchase/stock', 'Department-wise stock register.'], ['Stock transactions', '/admin/purchase/stock/transactions', 'Ledger of every stock purchase, issue, return and adjustment.'], ['Purchase approval roles', '/admin/purchase/settings', 'Assign approval roles and amount rules.'], ['Purchase Excel tools', '/admin/purchase/export', 'Download purchase data or an import template.']]],
-    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users', '/admin/users', 'Manage users and their role assignments.']]],
-    ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Car & driver fleet register', '/admin/car-fleet', 'Register the available cars and drivers.'], ['Users and roles', '/admin/users', 'Create users and assign administrator and approval duties.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.']]],
+    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users and roles', '/admin/departments', 'Manage users and their role assignments.']]],
+    ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Car & driver fleet register', '/admin/car-fleet', 'Register the available cars and drivers.'], ['Users and roles', '/admin/departments', 'Create users and assign administrator and approval duties.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.']]],
     ['5', 'Inventory', [['Inventory register', '/admin/inventory', 'Record assets department-wise, floor-wise, and office-wise.'], ['Inventory template', '/admin/inventory/template', 'Download an Excel template for importing inventory.'], ['Inventory Excel', '/admin/inventory/export', 'Download all inventory data in one Excel sheet.']]],
     ['7', 'Reports', [['Reports dashboard', '/admin/reports', 'Consolidated activity across all modules.'], ['Monthly Excel report', '/admin/reports/export', 'Download all module data in one workbook.']]]
   ];
@@ -497,13 +497,12 @@ const portalMenus = {
   ]},
   system: { icon: '⚙️', title: 'Admin Panel', tagline: 'Users, roles, permissions, workflows, reports, and the approval desk.', pages: [
     { label: 'Approvals desk', href: '/admin', desc: 'Auditorium requests in your lane, with stock and inventory tools.', level: 'manage' },
-    { label: 'Users and roles', href: '/admin/users', desc: 'Add, edit, and delete users; assign each role.', level: 'manage' },
+    { label: 'Users and roles', href: '/admin/departments', desc: 'Add, edit, and delete users; assign each role.', level: 'manage' },
     { label: 'Permissions matrix', href: '/admin/permissions', desc: 'Configure which roles can access each module and how.', level: 'manage' },
     { label: 'Role guide', href: '/admin/role-guide', desc: 'Edit who should be given which login.', level: 'manage' },
     { label: 'Audit log', href: '/admin/audit-logs', desc: 'Every administrative action, logged for accountability.', level: 'manage' },
     { label: 'Approval workflow builder', href: '/admin/workflows', desc: 'Configure amount bands and approval role routes per module.', level: 'manage' },
     { label: 'Approval log', href: '/admin/approvals-log', desc: 'Audit trail of every approval action.', level: 'manage' },
-    { label: 'Departments and Heads', href: '/admin/departments', desc: 'Maintain departments and assign each department Head.', level: 'manage' },
     { label: 'Email settings', href: '/admin/email-settings', desc: 'Set the sender email address for all notifications.', level: 'manage' },
     { label: 'Inventory', href: '/admin/inventory', desc: 'One-campus asset register — department-wise, floor-wise, and office-wise.', level: 'manage' },
     { label: 'Inventory template', href: '/admin/inventory/template', desc: 'Download an Excel template for importing inventory.', level: 'manage' },
@@ -536,14 +535,14 @@ const roleNames = {
 
 const roleOptionsForUser = (selected) => ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${escapeHtml(roleNames[role] || role)}</option>`).join('');
 
-const userRowTemplate = (candidate, currentUser) => {
+const userRowTemplate = (candidate, currentUser, departmentOptions) => {
   const formId = 'user-form-' + encodeURIComponent(candidate.id);
   const canDelete = candidate.id !== currentUser.id;
-  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><input form="${formId}" name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
+  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
 };
 
-const usersTable = (list, currentUser) => list.length
-  ? `<div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.map((candidate) => userRowTemplate(candidate, currentUser)).join('')}</tbody></table></div>`
+const usersTable = (list, currentUser, departmentOptions) => list.length
+  ? `<div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions)).join('')}</tbody></table></div>`
   : '<p class="small-copy">No users found.</p>';
 
 // Workspaces on the approval desk, mapped to the roles each one uses.
@@ -554,23 +553,8 @@ const workspaceTabs = [
   { key: 'inventory', icon: '📦', title: 'Inventory', roles: ['purchase_clerk', 'admin_officer'] }
 ];
 
-app.get('/admin/users', requireLogin, async (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  const allUsers = await getUsers();
-  const currentUser = req.session.user.id;
-
-  const workspacePanels = workspaceTabs.map((tab) => {
-    const list = allUsers.filter((user) => tab.roles.includes(user.role));
-    return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser)).join('') : '<tr><td colspan="5">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
-  }).join('');
-
-  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${allUsers.length})</button>${workspaceTabs.map((tab) => { const count = allUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
-
-  const roleSelectOptions = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}">${roleNames[role]}</option>`).join('');
-
-  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(allUsers, currentUser)}</section>`;
-
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Assign each user their role.</h2><p class="lede">Switch between workspaces to see who belongs to each one — email, name, department and role are fetched from the accounts database. A user with a shared role appears in more than one workspace.</p></section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><input name="department" placeholder="Department" required><select name="role" required>${roleSelectOptions}</select><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>03</span><h3>Excel import & export</h3></div><div class="admin-tools"><a class="page-nav" href="/admin/users/template">Download Excel template</a><a class="page-nav" href="/admin/users/export">Download Excel file</a><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});</script></body></html>`);
+app.get('/admin/users', requireLogin, (req, res) => {
+  res.redirect('/admin/departments');
 });
 
 // --- Approval desk tabs (Auditorium / Maintenance / Purchase / Car) ---
@@ -598,7 +582,7 @@ app.use((req, res, next) => {
   res.send = (body) => {
     if (typeof body !== 'string') return send(body);
     let html = body.replace('<link rel="stylesheet" href="/styles.css">', '<link rel="stylesheet" href="/styles.css"><style>.admin-tools{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:18px 0}.admin-tools form{display:flex;gap:8px;align-items:center;margin:0}.request-actions{display:inline-block;margin:0 4px 4px 0}.reject-form input{width:150px}.reject-button{background:#e97742;color:#fff;border-color:#e97742}#action-popup{border:1px solid #e97742;padding:30px;background:#f4f0e8}</style>');
-    html = html.replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage departments and Heads ↗</a></div>');
+    html = html.replace('<h3>Auditoriums</h3>', '<h3>Auditoriums</h3><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage users and roles ↗</a></div>');
     html = decorateAdminPage(html);
     return send(html);
   };
@@ -706,19 +690,38 @@ app.post('/admin/auditoriums/:id/lock', requireLogin, async (req, res) => {
 
 app.get('/admin/departments', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  const departments = await getDepartments();
-  const heads = (await getUsers()).filter((user) => user.role === 'head');
+  const allUsers = await getUsers();
+  const currentUser = req.session.user.id;
+  const fetchedDepartments = await getDepartments();
+  const departments = fetchedDepartments && fetchedDepartments.length ? fetchedDepartments : localDepartments;
+  const departmentOptions = (selected) => {
+    const names = departments.map((department) => department.name);
+    const extra = selected && !names.includes(selected) ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>` : '';
+    return `${extra}${departments.map((department) => `<option value="${escapeHtml(department.name)}"${department.name === selected ? ' selected' : ''}>${escapeHtml(department.name)}</option>`).join('')}`;
+  };
+
+  const workspacePanels = workspaceTabs.map((tab) => {
+    const list = allUsers.filter((user) => tab.roles.includes(user.role));
+    return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions)).join('') : '<tr><td colspan="5">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
+  }).join('');
+
+  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${allUsers.length})</button>${workspaceTabs.map((tab) => { const count = allUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
+
+  const roleSelectOptions = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}">${roleNames[role]}</option>`).join('');
+
+  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(allUsers, currentUser, departmentOptions)}</section>`;
+
   const imported = Number(req.query.imported || 0);
   const importNote = imported > 0 ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">Imported/updated ${imported} department(s) from Excel.</p>` : '';
-  const headOptions = (selected) => heads.map((head) => `<option value="${escapeHtml(head.id)}"${head.id === selected ? ' selected' : ''}>${escapeHtml(head.name)} (${escapeHtml(head.id)})</option>`).join('');
-  const rows = departments.map((department) => `<form class="auditorium-row" action="/admin/departments/${encodeURIComponent(department.id)}" method="post"><input name="name" value="${escapeHtml(department.name)}" placeholder="Department name" required><input name="email" type="email" value="${escapeHtml(department.email || '')}" placeholder="Department email (optional)"><input name="designation" value="${escapeHtml(department.designation || '')}" placeholder="Designation (e.g. Head of Department)"><select name="head_user_id" required><option value="">Assign department Head</option>${headOptions(department.head_user_id)}</select><button type="submit">Save changes</button><button formaction="/admin/departments/${encodeURIComponent(department.id)}/delete" type="submit">Delete</button></form>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage departments</title><link rel="stylesheet" href="/styles.css"><style>.auditorium-row{display:grid;grid-template-columns:1.4fr 1.4fr 1fr 1.6fr auto auto;gap:8px;align-items:center;margin-bottom:10px}.auditorium-row input,.auditorium-row select{padding:10px;border:1px solid var(--line);background:transparent;font:13px Arial}@media(max-width:760px){.auditorium-row{grid-template-columns:1fr 1fr}.auditorium-row button{grid-column:auto}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>departments</em></h1><a class="page-nav" href="/admin">Back to admin</a></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Department options and Heads.</h2><p class="lede">These departments appear on the public request form. Add the department's email and the head's designation.</p></section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a department</h3></div><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><input name="email" type="email" placeholder="Department email"><input name="designation" placeholder="Designation"><select name="head_user_id" required><option value="">Assign department Head</option>${headOptions('')}</select><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Existing departments</h3></div>${rows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>03</span><h3>Excel import &amp; export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Download Excel template</a><a class="page-nav" href="/admin/departments/export">Download Excel file</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload Excel</button></form></div><p class="small-copy">Required columns: Name, Head User ID. Optional: Email, Designation. The Head User ID must be a login already assigned the <b>head</b> role.</p></section></main></body></html>`);
+  const departmentRows = departments.map((department) => `<form class="create-user" action="/admin/departments/${encodeURIComponent(department.id)}" method="post"><input name="name" value="${escapeHtml(department.name)}" placeholder="Department name" required><button type="submit">Save changes</button><button formaction="/admin/departments/${encodeURIComponent(department.id)}/delete" type="submit">Delete</button></form>`).join('');
+
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Manage accounts and roles.</h2><p class="lede">Add, edit, and delete users, and assign each one a role. Switch between workspaces to see who belongs to each one.</p></section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role" required>${roleSelectOptions}</select><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Add a department</h3></div><p class="small-copy">Create the department here — it appears on the request form and in the Add a new user selector.</p><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Existing departments</h3></div>${departmentRows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>04</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>05</span><h3>Excel import and export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Departments template</a><a class="page-nav" href="/admin/departments/export">Departments Excel</a><a class="page-nav" href="/admin/users/template">Users template</a><a class="page-nav" href="/admin/users/export">Users Excel</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload departments</button></form><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload users</button></form></div><p class="small-copy">Departments Excel — required column: Name. Users Excel — required columns: Email, Name, Department, Role, Password.</p></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});</script></body></html>`);
 });
 
 app.get('/admin/departments/template', requireLogin, (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ Name: 'Computer Engineering', Email: 'computer.dept@svitvasad.ac.in', Designation: 'Head of Department', 'Head User ID': 'hod.computer@svitvasad.ac.in' }]), 'Departments');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ Name: 'Computer Engineering' }]), 'Departments');
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('departments-template.xlsx').send(buffer);
 });
@@ -750,22 +753,24 @@ app.post('/admin/departments/import', requireLogin, upload.single('departments_f
       const designation = String(row.designation || '').trim();
       const headUserId = String(row['head user id'] || row.head_user_id || '').trim().toLowerCase();
       if (!name) return res.status(400).send(`Invalid Excel row ${index + 2}: Name is required.`);
-      const head = currentUsers.find((user) => user.id.toLowerCase() === headUserId && user.role === 'head');
-      if (!head) return res.status(400).send(`Invalid Excel row ${index + 2}: Head User ID "${headUserId || '(blank)'}" must be a login with the head role.`);
+      const head = headUserId ? currentUsers.find((user) => user.id.toLowerCase() === headUserId && user.role === 'head') : null;
+      if (headUserId && !head) return res.status(400).send(`Invalid Excel row ${index + 2}: Head User ID "${headUserId}" must be a login with the head role.`);
       const duplicate = existing.find((d) => d.name.toLowerCase() === name.toLowerCase());
       if (supabase) {
         if (duplicate) {
-          await supabase.from('departments').update({ email, designation, head_user_id: head.id }).eq('id', duplicate.id);
+          await supabase.from('departments').update({ email, designation, head_user_id: head?.id || '' }).eq('id', duplicate.id);
         } else {
-          const { error } = await supabase.from('departments').insert({ name, email, designation, head_user_id: head.id });
+          const { error } = await supabase.from('departments').insert({ name, email, designation, head_user_id: head?.id || '' });
           if (error) return res.status(500).send(`Could not add "${name}": ${error.message}`);
         }
-        await supabase.from('user_accounts').update({ department: name }).eq('id', head.id);
+        if (head) await supabase.from('user_accounts').update({ department: name }).eq('id', head.id);
       } else {
-        const local = existing.find((d) => d.name.toLowerCase() === name.toLowerCase()) || (localDepartments.push({ id: Date.now() + created, name, email, designation, head_user_id: head.id }), localDepartments.at(-1));
-        Object.assign(local, { name, email, designation, head_user_id: head.id });
-        const localUser = users.find((user) => user.id === head.id);
-        if (localUser) localUser.department = name;
+        const local = existing.find((d) => d.name.toLowerCase() === name.toLowerCase()) || (localDepartments.push({ id: Date.now() + created, name, email, designation, head_user_id: head?.id || '' }), localDepartments.at(-1));
+        Object.assign(local, { name, email, designation, head_user_id: head?.id || '' });
+        if (head) {
+          const localUser = users.find((user) => user.id === head.id);
+          if (localUser) localUser.department = name;
+        }
       }
       created += 1;
     }
@@ -781,15 +786,17 @@ app.post('/admin/departments', requireLogin, async (req, res) => {
   const email = String(req.body.email || '').trim();
   const designation = String(req.body.designation || '').trim();
   const head = (await getUsers()).find((user) => user.id === req.body.head_user_id && user.role === 'head');
-  if (!name || !head) return res.status(400).send('Department name and a valid Head are required.');
+  if (!name) return res.status(400).send('Department name is required.');
   if (supabase) {
-    const { error } = await supabase.from('departments').insert({ name, email, designation, head_user_id: head.id });
+    const { error } = await supabase.from('departments').insert({ name, email, designation, head_user_id: head?.id || '' });
     if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.message);
-    await supabase.from('user_accounts').update({ department: name }).eq('id', head.id);
+    if (head) await supabase.from('user_accounts').update({ department: name }).eq('id', head.id);
   } else if (!localDepartments.some((department) => department.name === name)) {
-    localDepartments.push({ id: Date.now(), name, email, designation, head_user_id: head.id });
-    const localUser = users.find((user) => user.id === head.id);
-    if (localUser) localUser.department = name;
+    localDepartments.push({ id: Date.now(), name, email, designation, head_user_id: head?.id || '' });
+    if (head) {
+      const localUser = users.find((user) => user.id === head.id);
+      if (localUser) localUser.department = name;
+    }
   }
   res.redirect('/admin/departments');
 });
@@ -975,7 +982,7 @@ app.post('/admin/users', requireLogin, (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
   if (users.some((user) => user.id === email)) return res.status(409).send('Email already exists.');
   users.push({ id: email, password: req.body.password, name: req.body.name, role: req.body.role, department: req.body.department });
-  res.redirect('/admin/users');
+  res.redirect('/admin/departments');
 });
 
 function workbookResponse(res, rows, filename) {
@@ -1031,7 +1038,7 @@ app.post('/admin/users/import', requireLogin, upload.single('users_file'), async
   } catch (error) {
     return res.status(400).send(`Could not read Excel file: ${error.message}`);
   }
-  res.redirect('/admin/users');
+  res.redirect('/admin/departments');
 });
 
 app.post('/admin/users/:id/reset-password', requireLogin, (req, res) => {
@@ -1041,7 +1048,7 @@ app.post('/admin/users/:id/reset-password', requireLogin, (req, res) => {
   if (!user) return res.status(404).send('User not found.');
   if (password.length < 6) return res.status(400).send('Password must be at least 6 characters.');
   user.password = password;
-  res.redirect('/admin/users');
+  res.redirect('/admin/departments');
 });
 
 app.post('/admin/users/:id', requireLogin, (req, res) => {
@@ -1060,7 +1067,7 @@ app.post('/admin/users/:id', requireLogin, (req, res) => {
     if (String(req.body.password).length < 6) return res.status(400).send('Password must be at least 6 characters.');
     user.password = req.body.password;
   }
-  res.redirect('/admin/users');
+  res.redirect('/admin/departments');
 });
 
 app.post('/admin/users/:id/delete', requireLogin, (req, res) => {
@@ -1069,7 +1076,7 @@ app.post('/admin/users/:id/delete', requireLogin, (req, res) => {
   const index = users.findIndex((candidate) => candidate.id === req.params.id);
   if (index < 0) return res.status(404).send('User not found.');
   users.splice(index, 1);
-  res.redirect('/admin/users');
+  res.redirect('/admin/departments');
 });
 
 const roleGuideRoles = [
