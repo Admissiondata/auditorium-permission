@@ -94,15 +94,16 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABAS
 const supabase = process.env.SUPABASE_URL && supabaseKey
   ? createClient(process.env.SUPABASE_URL, supabaseKey)
   : null;
+const localDisabledUsers = new Set();
+
 async function getUsers() {
-  if (!supabase) return users;
+  if (!supabase) return users.map((u) => ({ ...u, is_disabled: localDisabledUsers.has(u.id) }));
   const { data, error } = await supabase.from('user_accounts').select('*').order('id');
   if (error) {
-    if (error.code === 'PGRST205') return users;
+    if (error.code === 'PGRST205') return users.map((u) => ({ ...u, is_disabled: localDisabledUsers.has(u.id) }));
     throw error;
   }
-  const storedIds = new Set(data.map((user) => user.id));
-  return [...users.filter((user) => !storedIds.has(user.id)), ...data];
+  return (data || []).map((u) => ({ ...u, is_disabled: Boolean(u.is_disabled) || localDisabledUsers.has(u.id) }));
 }
 
 async function saveUser(user, passwordProvided) {
@@ -237,7 +238,11 @@ async function renderRequestPage(req, res) {
     const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
     const availableCount = auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).length;
-    let result = page.replace('<input name="department" placeholder="e.g. Computer Engineering" required>', `<select name="department" required><option value="">Select department</option>${departmentOptions}</select>`).replace('<label>Branch / Department<input name="requester_branch" placeholder="e.g. Computer Engineering" required></label>', `<label>Branch / Department<select name="requester_branch" required><option value="">Select branch</option>${departmentOptions}</select></label>`).replace(/<fieldset><legend>Choose auditorium<\/legend>[\s\S]*?<\/fieldset>/, `<fieldset><legend>Choose auditorium</legend>${options}</fieldset>`).replace('<strong>02</strong>', `<strong>${availableCount}</strong>`);
+    let result = page
+      .replace('<input name="department" placeholder="e.g. Computer Engineering" required>', `<select name="department" required><option value="">Select department</option>${departmentOptions}</select>`)
+      .replace('<label>Branch / Department<input name="requester_branch" placeholder="e.g. Computer Engineering" required></label>', `<label>Branch / Department<select name="requester_branch" required><option value="">Select branch</option>${departmentOptions}</select></label>`)
+      .replace(/<fieldset><legend>Choose auditorium<\/legend>[\s\S]*?<\/fieldset>/, `<fieldset><legend>Choose auditorium</legend>${options}</fieldset>`)
+      .replace(/<strong>\d+<\/strong>\s*<span>Auditoriums available<\/span>/, `<strong>${availableCount < 10 ? '0' + availableCount : availableCount}</strong>\n          <span>Auditoriums available</span>`);
     result = result.replace(/<select name="department" required><option value="">Select department<\/option><\/select>/g, `<select name="department" required>${purchaseDepartmentOptions}</select>`);
     res.send(result);
   } catch (error) {
@@ -318,6 +323,9 @@ app.post('/login', async (req, res) => {
   }
   const user = allUsers.find((candidate) => candidate.id === req.body.user_id && candidate.password === req.body.password);
   if (!user) return renderLogin(res, 'Invalid email ID or password. Please check your details and try again.');
+  if (user.is_disabled || localDisabledUsers.has(user.id)) {
+    return renderLogin(res, 'This account is currently disabled by an administrator. Please contact admin for access.');
+  }
   const departments = user.role === 'head' ? await getDepartments() : [];
   const assignedDepartments = departments.filter((department) => department.head_user_id === user.id).map((department) => department.name);
   req.session.user = { id: user.id, name: user.name, role: user.role === 'sub_admin' ? 'admin' : user.role, department: user.department, departments: assignedDepartments.length ? assignedDepartments : [user.department] };
@@ -402,7 +410,7 @@ app.get('/dashboard', requireLogin, async (req, res) => {
     cards.push(`<a class="portal-card" href="/portal/system" style="--accent:#b34b1c"><span class="portal-icon">⚙️</span><div class="portal-body"><h3>Admin Panel</h3><span class="portal-stat">Users, roles, permissions, workflows, reports</span><span class="portal-open">Open →</span></div></a>`);
   }
 
-  const headerNav = `<div class="dash-nav"><a class="nav-link" href="/notifications">🔔 Notifications${notifBadge}</a><span class="nav-user">👤 ${escapeHtml(user.name)}</span><span class="nav-role">${escapeHtml(user.role)}</span><form action="/logout" method="post"><button class="quiet" type="submit">Logout</button></form></div>`;
+  const headerNav = `<div class="dash-nav">${canManageSystem ? '<a class="nav-link" style="background:var(--orange,#e97742);color:#fff;padding:6px 14px;border-radius:6px;font-weight:700" href="/admin">⚙️ Admin Panel</a><a class="nav-link" href="/admin/pages">📑 All Admin Tools</a>' : ''}<a class="nav-link" href="/notifications">🔔 Notifications${notifBadge}</a><span class="nav-user">👤 ${escapeHtml(user.name)}</span><span class="nav-role">${escapeHtml(user.role)}</span><form action="/logout" method="post"><button class="quiet" type="submit">Logout</button></form></div>`;
 
   const pendingTabs = await pendingApprovalTabs(user);
   const pendingApprovalBlock = pendingTabs.length > 0
@@ -453,7 +461,7 @@ app.get('/admin/pages', requireLogin, async (req, res) => {
     ['7', 'Reports', [['Reports dashboard', '/admin/reports', 'Consolidated activity across all modules.'], ['Monthly Excel report', '/admin/reports/export', 'Download all module data in one workbook.']]]
   ];
   const sections = groups.map(([number, title, pages]) => `<section class="directory-group"><div class="section-heading"><span>${number}</span><h2>${title}</h2></div><div class="page-directory">${pages.map(([pageTitle, href, description]) => `<a class="page-nav" href="${href}"><strong>${pageTitle}</strong><span>${description}</span> <b>↗</b></a>`).join('')}</div></section>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin pages</title><link rel="stylesheet" href="/styles.css"><style>.directory-group{border-top:1px solid var(--ink);padding:28px 0}.directory-group .section-heading{margin-bottom:18px}.directory-group .section-heading h2{font-size:26px;font-weight:400;margin:0}.page-directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.page-directory .page-nav{display:flex;flex-direction:column;gap:8px;height:100%;padding:20px;border:1px solid var(--line)}.page-directory .page-nav span{font:13px/1.4 Arial,sans-serif;color:var(--muted)}.page-directory .page-nav b{color:var(--orange)}@media(max-width:700px){.page-directory{grid-template-columns:1fr}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Admin<br><em>pages</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Administration</p><h2>Choose a workspace.</h2><p class="lede">Auditorium, maintenance, purchase, and vehicle workflows.</p></section>${roleGuideTable('Login & role guide — who should get which login', true, guideRows)}${sections}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin pages</title><link rel="stylesheet" href="/styles.css"><style>.directory-group{border-top:1px solid var(--ink);padding:28px 0}.directory-group .section-heading{margin-bottom:18px}.directory-group .section-heading h2{font-size:26px;font-weight:400;margin:0}.page-directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.page-directory .page-nav{display:flex;flex-direction:column;gap:8px;height:100%;padding:20px;border:1px solid var(--line)}.page-directory .page-nav span{font:13px/1.4 Arial,sans-serif;color:var(--muted)}.page-directory .page-nav b{color:var(--orange)}@media(max-width:700px){.page-directory{grid-template-columns:1fr}}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Admin<br><em>pages</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/pages', req.session.user)}<section class="panel-intro"><p class="eyebrow">Administration</p><h2>Choose a workspace.</h2><p class="lede">Auditorium, maintenance, purchase, and vehicle workflows.</p></section>${roleGuideTable('Login & role guide — who should get which login', true, guideRows)}${sections}</main></body></html>`);
 });
 
 // --- Per-module workspace menus (dashboard cards open these) ---
@@ -535,14 +543,18 @@ const roleNames = {
 
 const roleOptionsForUser = (selected) => ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${escapeHtml(roleNames[role] || role)}</option>`).join('');
 
-const userRowTemplate = (candidate, currentUser, departmentOptions) => {
-  const formId = 'user-form-' + encodeURIComponent(candidate.id);
+const userRowTemplate = (candidate, currentUser, departmentOptions, prefix = 'all') => {
+  const formId = `user-form-${prefix}-${encodeURIComponent(candidate.id).replace(/%/g, '_')}`;
   const canDelete = candidate.id !== currentUser.id;
-  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
+  const isDisabled = Boolean(candidate.is_disabled);
+  const statusBadge = isDisabled
+    ? '<span class="status rejected" style="font-size:11px;padding:3px 7px">Disabled</span>'
+    : '<span class="status approved" style="font-size:11px;padding:3px 7px">Active</span>';
+  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td>${statusBadge}</td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/toggle" formmethod="post" onclick="return confirm('${isDisabled ? 'Enable this user account?' : 'Disable this user account? The user will not be able to log in.'}')">${isDisabled ? 'Enable' : 'Disable'}</button><button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post" onclick="return confirm('Are you sure you want to delete this user permanently?')">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
 };
 
-const usersTable = (list, currentUser, departmentOptions) => list.length
-  ? `<div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions)).join('')}</tbody></table></div>`
+const usersTable = (list, currentUser, departmentOptions, prefix = 'all') => list.length
+  ? `<div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions, prefix)).join('')}</tbody></table></div>`
   : '<p class="small-copy">No users found.</p>';
 
 // Workspaces on the approval desk, mapped to the roles each one uses.
@@ -564,6 +576,26 @@ const deskTabs = [
   { icon: '🛒', label: 'Purchase', path: '/admin/purchase', visible: (user) => canManagePurchases(user) },
   { icon: '🚗', label: 'Car', path: '/admin/car-requests', visible: (user) => isAdmin(user) || user?.role === 'admin_officer' }
 ];
+
+function adminNavBar(activePath, user) {
+  const isAdm = isAdmin(user);
+  const items = [
+    { label: '🏛️ Approvals Desk', path: '/admin' },
+    { label: '🏛️ Manage Rooms', path: '/admin/auditoriums/manage', adminOnly: true },
+    { label: '👥 Users & Roles', path: '/admin/departments', adminOnly: true },
+    { label: '🔧 Maintenance', path: '/admin/maintenance' },
+    { label: '🛒 Purchase', path: '/admin/purchase' },
+    { label: '🚗 Car Requests', path: '/admin/car-requests' },
+    { label: '📦 Inventory', path: '/admin/inventory' },
+    { label: '⚙️ All Admin Tools', path: '/admin/pages', adminOnly: true },
+    { label: '📊 Dashboard', path: '/dashboard' }
+  ];
+  const links = items
+    .filter((item) => !item.adminOnly || isAdm)
+    .map((item) => `<a class="admin-tab-link ${activePath === item.path ? 'active' : ''}" href="${item.path}">${item.label}</a>`)
+    .join('');
+  return `<nav class="admin-top-nav">${links}</nav>`;
+}
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/admin/') || req.path === '/admin/pages') return next();
@@ -606,10 +638,14 @@ app.get('/admin', requireLogin, async (req, res) => {
   const sortedRequests = sortPendingFirst(visibleRequests);
   const rows = sortedRequests.length ? sortedRequests.map((request) => requestRow(request, user, auditoriumConfigs)).join('') : `<tr><td colspan="${isAdmin(user) ? 9 : 5}">No requests yet.</td></tr>`;
   const visibleUsers = isAdmin(user) ? await getUsers() : [];
-  const userRows = isAdmin(user) ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role">${['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${candidate.role === role ? ' selected' : ''}>${role}</option>`).join('')}</select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`).join('') : '';
+  const userRows = isAdmin(user) ? visibleUsers.map((candidate) => `<tr><td colspan="5"><form class="edit-user create-user" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required><input name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required><input name="department" value="${escapeHtml(candidate.department)}" aria-label="Department" required><select name="role" aria-label="Role">${['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${candidate.role === role ? ' selected' : ''}>${role}</option>`).join('')}</select><input name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save changes</button></form><form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post"><button class="small-button" type="submit" onclick="return confirm('Are you sure you want to delete this user?')">Delete</button></form></td></tr>`).join('') : '';
   const auditoriums = isAdmin(user) ? auditoriumConfigs : [];
+  const auditoriumRows = auditoriums.map((aud) => {
+    const isLocked = Boolean(aud.is_locked);
+    return `<tr><td><strong>${escapeHtml(aud.name)}</strong></td><td>${escapeHtml(aud.capacity || 300)}</td><td><span class="status ${isLocked ? 'rejected' : 'approved'}">${isLocked ? 'Disabled' : 'Enabled'}</span></td><td><form action="/admin/auditoriums/${aud.id}/lock" method="post" style="display:inline"><button class="small-button" type="submit" onclick="return confirm('${isLocked ? 'Enable this auditorium for bookings?' : 'Disable this auditorium from bookings?'}')">${isLocked ? 'Enable' : 'Disable'}</button></form> <form action="/admin/auditoriums/${aud.id}/delete" method="post" style="display:inline"><button class="small-button reject-button" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form></td></tr>`;
+  }).join('');
   const requestHead = isAdmin(user) ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${user.role === 'admin' ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.length} rooms available on the public request form.</p><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin', user)}<section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${isAdmin(user) ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.filter(a => !a.is_locked).length} enabled room(s) available on the public request form.</p><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Auditorium</th><th>Capacity</th><th>Status</th><th>Actions</th></tr></thead><tbody>${auditoriumRows || '<tr><td colspan="4">No auditoriums registered.</td></tr>'}</tbody></table></div><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><input name="capacity" type="number" min="1" value="300" placeholder="Capacity" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
 });
 
 app.post('/admin/auditoriums', requireLogin, async (req, res) => {
@@ -638,8 +674,8 @@ app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
     const noneOption = `<option value="">-- None (${label}) --</option>`;
     return noneOption + users.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
   };
-  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span>Locked: hidden from request form</span><button type="submit">Unlock</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit">Delete</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit">Lock</button></form>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure approval roles, assign Principal and Maintenance Officer per auditorium, or delete a room.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
+  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span style="color:var(--orange)">Locked: disabled from request form</span><button type="submit" onclick="return confirm('Enable and unlock this auditorium?')">Unlock (Enable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit" onclick="return confirm('Save changes to this auditorium?')">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit" onclick="return confirm('Disable and lock this auditorium from the public request form?')">Lock (Disable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>`).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure approval roles, assign Principal and Maintenance Officer per auditorium, lock (disable) or delete a room permanently.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
 });
 
 app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
@@ -662,8 +698,6 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
 
 app.post('/admin/auditoriums/:id/delete', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  const current = (await getAuditoriumConfigs()).find((auditorium) => String(auditorium.id) === req.params.id);
-  if (current?.is_locked) return res.status(409).send('Unlock the auditorium before deleting it.');
   if (supabase) {
     const { error } = await supabase.from('auditoriums').delete().eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -702,20 +736,21 @@ app.get('/admin/departments', requireLogin, async (req, res) => {
 
   const workspacePanels = workspaceTabs.map((tab) => {
     const list = allUsers.filter((user) => tab.roles.includes(user.role));
-    return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions)).join('') : '<tr><td colspan="5">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
+    return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions, tab.key)).join('') : '<tr><td colspan="6">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
   }).join('');
 
   const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${allUsers.length})</button>${workspaceTabs.map((tab) => { const count = allUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
 
   const roleSelectOptions = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}">${roleNames[role]}</option>`).join('');
 
-  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(allUsers, currentUser, departmentOptions)}</section>`;
+  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(allUsers, currentUser, departmentOptions, 'all')}</section>`;
 
   const imported = Number(req.query.imported || 0);
   const importNote = imported > 0 ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">Imported/updated ${imported} department(s) from Excel.</p>` : '';
-  const departmentRows = departments.map((department) => `<form class="create-user" action="/admin/departments/${encodeURIComponent(department.id)}" method="post"><input name="name" value="${escapeHtml(department.name)}" placeholder="Department name" required><button type="submit">Save changes</button><button formaction="/admin/departments/${encodeURIComponent(department.id)}/delete" type="submit">Delete</button></form>`).join('');
+  const flashMsg = req.query.msg ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">${escapeHtml(String(req.query.msg))}</p>` : '';
+  const departmentRows = departments.map((department) => `<form class="create-user" action="/admin/departments/${encodeURIComponent(department.id)}" method="post"><input name="name" value="${escapeHtml(department.name)}" placeholder="Department name" required><button type="submit" onclick="return confirm('Are you sure you want to save changes to this department?')">Save changes</button><button formaction="/admin/departments/${encodeURIComponent(department.id)}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this department?')">Delete</button></form>`).join('');
 
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Manage accounts and roles.</h2><p class="lede">Add, edit, and delete users, and assign each one a role. Switch between workspaces to see who belongs to each one.</p></section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role" required>${roleSelectOptions}</select><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Add a department</h3></div><p class="small-copy">Create the department here — it appears on the request form and in the Add a new user selector.</p><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Existing departments</h3></div>${departmentRows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>04</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>05</span><h3>Excel import and export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Departments template</a><a class="page-nav" href="/admin/departments/export">Departments Excel</a><a class="page-nav" href="/admin/users/template">Users template</a><a class="page-nav" href="/admin/users/export">Users Excel</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload departments</button></form><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload users</button></form></div><p class="small-copy">Departments Excel — required column: Name. Users Excel — required columns: Email, Name, Department, Role, Password.</p></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});</script></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Manage accounts and roles.</h2><p class="lede">Add, edit, and delete users, and assign each one a role. Switch between workspaces to see who belongs to each one.</p>${flashMsg}</section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role" required>${roleSelectOptions}</select><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Add a department</h3></div><p class="small-copy">Create the department here — it appears on the request form and in the Add a new user selector.</p><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Existing departments</h3></div>${departmentRows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>04</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>05</span><h3>Excel import and export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Departments template</a><a class="page-nav" href="/admin/departments/export">Departments Excel</a><a class="page-nav" href="/admin/users/template">Users template</a><a class="page-nav" href="/admin/users/export">Users Excel</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload departments</button></form><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload users</button></form></div><p class="small-copy">Departments Excel — required column: Name. Users Excel — required columns: Email, Name, Department, Role, Password.</p></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});</script></body></html>`);
 });
 
 app.get('/admin/departments/template', requireLogin, (req, res) => {
@@ -976,13 +1011,39 @@ function approvalTransition(request, auditorium) {
   return { role: roles[stage], status: nextStatus };
 }
 
-app.post('/admin/users', requireLogin, (req, res) => {
+app.post('/admin/users', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const email = String(req.body.id || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
-  if (users.some((user) => user.id === email)) return res.status(409).send('Email already exists.');
-  users.push({ id: email, password: req.body.password, name: req.body.name, role: req.body.role, department: req.body.department });
-  res.redirect('/admin/departments');
+  if (!req.body.name || !req.body.department || !req.body.role) return res.status(400).send('Name, department, and role are required.');
+  const password = String(req.body.password || '').trim();
+  const currentUsers = await getUsers();
+  const existing = currentUsers.find((user) => user.id === email) || users.find((user) => user.id === email);
+  if (!existing && (!password || password.length < 6)) {
+    return res.status(400).send('Password must be at least 6 characters.');
+  }
+  if (password && password.length < 6) {
+    return res.status(400).send('Password must be at least 6 characters.');
+  }
+  const values = {
+    id: email,
+    name: String(req.body.name).trim(),
+    department: String(req.body.department).trim(),
+    role: req.body.role,
+    password: password || (existing ? existing.password : '')
+  };
+  const localIndex = users.findIndex((user) => user.id === email);
+  if (localIndex >= 0) {
+    Object.assign(users[localIndex], values);
+  } else {
+    users.push(values);
+  }
+  try {
+    await saveUser(values, Boolean(values.password));
+  } catch (error) {
+    return res.status(500).send(`Could not save user: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent(existing ? 'User updated successfully.' : 'User added successfully.'));
 });
 
 function workbookResponse(res, rows, filename) {
@@ -1041,42 +1102,90 @@ app.post('/admin/users/import', requireLogin, upload.single('users_file'), async
   res.redirect('/admin/departments');
 });
 
-app.post('/admin/users/:id/reset-password', requireLogin, (req, res) => {
+app.post('/admin/users/:id/reset-password', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  const user = users.find((candidate) => candidate.id === req.params.id);
+  const currentUsers = await getUsers();
+  const user = currentUsers.find((candidate) => candidate.id === req.params.id);
   const password = String(req.body.password || '').trim();
   if (!user) return res.status(404).send('User not found.');
   if (password.length < 6) return res.status(400).send('Password must be at least 6 characters.');
   user.password = password;
-  res.redirect('/admin/departments');
+  try {
+    await saveUser({ ...user, password }, true);
+  } catch (error) {
+    return res.status(500).send(`Could not save password: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent('Password reset successfully.'));
 });
 
-app.post('/admin/users/:id', requireLogin, (req, res) => {
+app.post('/admin/users/:id', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  const user = users.find((candidate) => candidate.id === req.params.id);
+  const currentUsers = await getUsers();
+  const user = currentUsers.find((candidate) => candidate.id === req.params.id) || users.find((candidate) => candidate.id === req.params.id);
   const email = String(req.body.id || '').trim().toLowerCase();
   if (!user) return res.status(404).send('User not found.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
-  if (users.some((candidate) => candidate !== user && candidate.id === email)) return res.status(409).send('Email already exists.');
   if (!req.body.name || !req.body.department || !req.body.role) return res.status(400).send('Name, department, and role are required.');
-  user.id = email;
-  user.name = String(req.body.name).trim();
-  user.department = String(req.body.department).trim();
-  user.role = req.body.role;
+  const changes = { ...user, id: email, name: String(req.body.name).trim(), department: String(req.body.department).trim(), role: req.body.role };
   if (req.body.password) {
     if (String(req.body.password).length < 6) return res.status(400).send('Password must be at least 6 characters.');
-    user.password = req.body.password;
+    changes.password = req.body.password;
   }
-  res.redirect('/admin/departments');
+  const localUser = users.find((u) => u.id === req.params.id);
+  if (localUser) {
+    Object.assign(localUser, changes);
+  }
+  const targetLocalUser = users.find((u) => u.id === email);
+  if (targetLocalUser && targetLocalUser !== localUser) {
+    Object.assign(targetLocalUser, changes);
+  }
+  try {
+    if (req.params.id !== email && supabase) {
+      await supabase.from('user_accounts').delete().eq('id', req.params.id);
+    }
+    await saveUser(changes, Boolean(changes.password));
+  } catch (error) {
+    return res.status(500).send(`Could not save user: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent('User saved successfully.'));
 });
 
-app.post('/admin/users/:id/delete', requireLogin, (req, res) => {
+app.post('/admin/users/:id/delete', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   if (req.session.user.id === req.params.id) return res.status(400).send('You cannot delete the account currently in use.');
-  const index = users.findIndex((candidate) => candidate.id === req.params.id);
-  if (index < 0) return res.status(404).send('User not found.');
-  users.splice(index, 1);
-  res.redirect('/admin/departments');
+  const currentUsers = await getUsers();
+  const existing = currentUsers.find((candidate) => candidate.id === req.params.id);
+  if (!existing) return res.status(404).send('User not found.');
+  const localIndex = users.findIndex((candidate) => candidate.id === req.params.id);
+  if (localIndex >= 0) users.splice(localIndex, 1);
+  localDisabledUsers.delete(req.params.id);
+  if (supabase) {
+    const { error } = await supabase.from('user_accounts').delete().eq('id', req.params.id);
+    if (error) return res.status(500).send(`Could not delete user: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent('User deleted successfully.'));
+});
+
+app.post('/admin/users/:id/toggle', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (req.session.user.id === req.params.id) return res.status(400).send('You cannot disable your own active account.');
+  const currentUsers = await getUsers();
+  const existing = currentUsers.find((candidate) => candidate.id === req.params.id);
+  if (!existing) return res.status(404).send('User not found.');
+  const willBeDisabled = !existing.is_disabled;
+  if (willBeDisabled) {
+    localDisabledUsers.add(req.params.id);
+  } else {
+    localDisabledUsers.delete(req.params.id);
+  }
+  if (supabase) {
+    try {
+      await supabase.from('user_accounts').update({ is_disabled: willBeDisabled }).eq('id', req.params.id);
+    } catch (e) {
+      // Column may not exist yet, in-memory localDisabledUsers preserves state
+    }
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent(willBeDisabled ? `Account ${req.params.id} has been disabled.` : `Account ${req.params.id} has been enabled.`));
 });
 
 const roleGuideRoles = [
