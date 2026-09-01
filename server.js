@@ -76,10 +76,10 @@ const localDepartments = [
   { id: 1, name: 'Computer Engineering', head_user_id: 'hod.computer@svitvasad.ac.in', email: '', designation: '' }
 ];
 const localAuditoriums = [
-  { id: 1, name: 'Architecture Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 3, name: 'Main Auditorium', capacity: 500, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 4, name: 'Seminar Auditorium', capacity: 250, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' }
+  { id: 1, name: 'Architecture Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
+  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
+  { id: 3, name: 'Main Auditorium', capacity: 500, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
+  { id: 4, name: 'Seminar Auditorium', capacity: 250, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' }
 ];
 const users = [
   { id: 'admin@svitvasad.ac.in', password: 'admin123', name: 'System administrator', role: 'admin', department: 'All departments' },
@@ -112,6 +112,60 @@ async function saveUser(user, passwordProvided) {
   if (!passwordProvided && !values.password) throw new Error('Existing user password is unavailable.');
   const { error } = await supabase.from('user_accounts').upsert(values, { onConflict: 'id' });
   if (error) throw error;
+}
+
+// --- Additional role assignments for a single email (one email, multiple roles) ---
+const localRoleAssignments = [
+  { id: 1, user_id: 'principal@svitvasad.ac.in', name: 'Principal', department: 'All departments', role: 'principal' }
+];
+async function getRoleAssignments() {
+  if (!supabase) return localRoleAssignments.map((a) => ({ ...a }));
+  const { data, error } = await supabase.from('role_assignments').select('*').order('id');
+  if (error) {
+    if (error.code === 'PGRST205' || error.code === '42501') return localRoleAssignments.map((a) => ({ ...a }));
+    throw error;
+  }
+  return (data || []).map((a) => ({ ...a }));
+}
+async function saveRoleAssignment(userId, name, department, role) {
+  const assignment = { user_id: userId, name, department, role };
+  const updateLocal = () => {
+    const index = localRoleAssignments.findIndex((a) => a.user_id === userId && a.department === department && a.role === role);
+    if (index >= 0) Object.assign(localRoleAssignments[index], assignment);
+    else localRoleAssignments.push({ id: Date.now(), ...assignment });
+  };
+  if (!supabase) { updateLocal(); return; }
+  try {
+    const { error } = await supabase.from('role_assignments').upsert(assignment, { onConflict: 'user_id,role,department' });
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01' || error.code === '42501') updateLocal();
+      else throw error;
+    }
+  } catch (e) {
+    if (e.code === 'PGRST205' || e.code === '42P01' || e.code === '42501') updateLocal();
+    else throw e;
+  }
+}
+async function deleteRoleAssignment(userId, department, role) {
+  const deleteLocal = () => {
+    const index = localRoleAssignments.findIndex((a) => a.user_id === userId && a.department === department && a.role === role);
+    if (index >= 0) localRoleAssignments.splice(index, 1);
+  };
+  if (!supabase) { deleteLocal(); return; }
+  try {
+    const { error } = await supabase.from('role_assignments').delete().eq('user_id', userId).eq('department', department).eq('role', role);
+    if (error) {
+      if (error.code === 'PGRST205' || error.code === '42P01' || error.code === '42501') deleteLocal();
+      else throw error;
+    }
+  } catch (e) {
+    if (e.code === 'PGRST205' || e.code === '42P01' || e.code === '42501') deleteLocal();
+    else throw e;
+  }
+}
+async function userRolesForLogin(user) {
+  const extra = await getRoleAssignments();
+  return (extra || []).filter((a) => a.user_id === user.id);
 }
 
 const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD
@@ -229,11 +283,18 @@ async function notifyRequester(request, status, remarks) {
 
 async function renderRequestPage(req, res) {
   try {
+    const requestPageEnabled = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
+    if (!requestPageEnabled) {
+      const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+      const disabledHtml = '<section class="main-content"><p class="eyebrow">Requests closed</p><h1>Auditorium<br><em>permission</em></h1><p class="lede">The auditorium request page has been temporarily disabled by an administrator.</p><div style="padding:24px;border:1px solid var(--orange);border-radius:4px;color:var(--ink);font:15px/1.6 Arial,sans-serif"><strong>Requests are currently closed.</strong><br>New auditorium requests cannot be submitted right now. Please try again later or contact the administrator for assistance.</div></section>';
+      res.send(page.replace(/<section class="main-content">[\s\S]*?<\/section>\s*<\/div>\s*<footer>/, () => `${disabledHtml}</div>\n    <footer>`));
+      return;
+    }
     const auditoriumConfigs = await getAuditoriumConfigs();
     const departments = await getDepartments();
     const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
     const options = auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).length
-      ? auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).map((auditorium) => `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" required><span>${auditoriumLabel(auditorium)}</span></label>`).join('')
+      ? auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).map((auditorium) => `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" data-min-students="${auditorium.min_students || 1}" required><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Min: ${auditorium.min_students || 1} students)</span></span></label>`).join('')
       : '<p class="empty-rooms">No auditoriums are currently available. An administrator must unlock a room before it can be selected.</p>';
     const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
@@ -284,13 +345,20 @@ const defaultRoleGuide = [
 ];
 let localRoleGuide = null;
 async function getRoleGuide() {
-  if (!supabase) return localRoleGuide ? localRoleGuide.map((row) => ({ ...row })) : defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+  const normalizeDefaultRow = ([sortOrder, part, giveLogin, what], index) => ({
+    part,
+    give_login: giveLogin,
+    what,
+    sort_order: Number(sortOrder) || index + 1
+  });
+
+  if (!supabase) return localRoleGuide ? localRoleGuide.map((row) => ({ ...row })) : defaultRoleGuide.map(normalizeDefaultRow);
   const { data, error } = await supabase.from('role_guide').select('*').order('sort_order', { ascending: true }).order('id', { ascending: true });
   if (error) {
-    if (error.code === 'PGRST205' || error.code === '42501') return defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+    if (error.code === 'PGRST205' || error.code === '42501') return defaultRoleGuide.map(normalizeDefaultRow);
     throw error;
   }
-  return data && data.length ? data : defaultRoleGuide.map(([part, login, what], index) => ({ part, give_login: login, what, sort_order: index + 1 }));
+  return data && data.length ? data : defaultRoleGuide.map(normalizeDefaultRow);
 }
 const roleGuideTable = (heading, editable = false, rows = []) => `<section class="user-management role-guide"><div class="section-heading"><h3>${escapeHtml(heading)}</h3></div><p class="small-copy">Who should be given which login.</p><div class="admin-tools">${editable ? '<a class="page-nav" href="/admin/role-guide">Edit guide rows ↗</a>' : ''}</div><div class="table-wrap"><table><thead><tr><th>#</th><th>Part</th><th>Give login to</th><th>What they can do</th></tr></thead><tbody>${rows.length ? rows.map((row) => `<tr><td>${escapeHtml(row.sort_order === null || row.sort_order === undefined ? '' : row.sort_order)}</td><td>${escapeHtml(row.part || '')}</td><td>${escapeHtml(row.give_login || '')}</td><td>${escapeHtml(row.what || '')}</td></tr>`).join('') : '<tr><td colspan="4">No guide rows yet.</td></tr>'}</tbody></table></div></section>`;
 
@@ -313,6 +381,30 @@ const renderLogin = (res, error) => {
   res.status(error ? 401 : 200).send(page.replace('<form class="login-form"', `${alert}<form class="login-form"`));
 };
 
+const establishSession = (user) => {
+  if (!user) return;
+  const subAdminOff = user.role === 'sub_admin' ? 'admin' : user.role;
+  const session = { id: user.id, name: user.name, role: subAdminOff, department: user.department };
+  if (user.departments && user.departments.length) session.departments = user.departments;
+  else if (session.department) session.departments = [session.department];
+  return session;
+};
+
+const renderLoginRoleSelect = (res, user, assignments, error) => {
+  const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'login.html'), 'utf8');
+  const alert = error ? `<div class="login-alert" style="color:var(--orange);margin-bottom:20px;font:13px/1.5 Arial,sans-serif">${escapeHtml(error)}</div>` : '';
+  const choices = [
+    { label: `${user.department} — ${roleNames[user.role] || user.role}`, role: user.role, department: user.department, isPrimary: true },
+    ...assignments.map((a) => ({ label: `${a.department || 'All departments'} — ${roleNames[a.role] || a.role}`, role: a.role, department: a.department, isPrimary: false }))
+  ].map((c, i) => `<button type="button" class="login-role-choice" data-role="${escapeHtml(c.role)}" data-dept="${escapeHtml(c.department)}" style="display:block;width:100%;padding:14px 16px;margin:0 0 10px;font:14px/1.4 Arial,sans-serif;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:4px;cursor:pointer;text-align:left">${c.isPrimary ? '⭐ ' : ''}${escapeHtml(c.label)}</button>`).join('');
+  const script = `<script>document.querySelectorAll('.login-role-choice').forEach((b)=>b.addEventListener('click',()=>{const r=document.querySelector('#role-value');r.value=b.dataset.role;document.querySelector('#dept-value').value=b.dataset.dept;b.closest('form').submit();}));</script>`;
+  res.send(page
+    .replace('<form class="login-form"', `${alert}<form class="login-form"`)
+    .replace(/<button type="submit">Open approval desk[\s\S]*?<\/button>/, `${choices}<input type="hidden" name="role" id="role-value" value=""><input type="hidden" name="department" id="dept-value" value=""><input type="hidden" name="user_id" value="${escapeHtml(user.id)}"><input type="hidden" name="password" value="${escapeHtml(user.password || '')}">`)
+    .replace('<p class="login-help">Department Heads are assigned by the administrator.</p>', '<p class="login-help">This email has multiple roles. Choose one to continue.</p>')
+    .replace('</form>', `${script}</form>`));
+};
+
 app.post('/login', async (req, res) => {
   let allUsers;
   try {
@@ -326,9 +418,25 @@ app.post('/login', async (req, res) => {
   if (user.is_disabled || localDisabledUsers.has(user.id)) {
     return renderLogin(res, 'This account is currently disabled by an administrator. Please contact admin for access.');
   }
-  const departments = user.role === 'head' ? await getDepartments() : [];
+  const assignments = await userRolesForLogin(user);
+  if (assignments.filter((a) => a.role !== user.role).length && !req.body.role) {
+    return renderLoginRoleSelect(res, user, assignments, 'This email has multiple roles. Choose the role you want to sign in with.');
+  }
+  let selectedRole = req.body.role || user.role;
+  let selectedDepartment = req.body.department || user.department;
+  if (req.body.role && req.body.role !== user.role) {
+    const assignment = assignments.find((a) => a.role === selectedRole && (a.department === req.body.department));
+    if (assignment) {
+      selectedRole = assignment.role;
+      selectedDepartment = assignment.department;
+    }
+  }
+  const buildUser = { ...user, role: selectedRole, department: selectedDepartment };
+  const departments = buildUser.role === 'head' ? await getDepartments() : [];
   const assignedDepartments = departments.filter((department) => department.head_user_id === user.id).map((department) => department.name);
-  req.session.user = { id: user.id, name: user.name, role: user.role === 'sub_admin' ? 'admin' : user.role, department: user.department, departments: assignedDepartments.length ? assignedDepartments : [user.department] };
+  const session = establishSession(buildUser);
+  if (assignedDepartments.length) session.departments = assignedDepartments;
+  req.session.user = session;
   res.redirect('/dashboard');
 });
 
@@ -340,7 +448,8 @@ const portalDefs = [
   { key: 'maintenance', icon: '🔧', title: 'Maintenance', color: '#2a7f52', links: { request: '/maintenance', approve: '/admin/maintenance', manage: '/admin/maintenance' } },
   { key: 'purchase', icon: '🛒', title: 'Purchase', color: '#2b5f8a', links: { request: '/purchase/local', approve: '/admin/purchase', stock: '/admin/purchase/stock', manage: '/admin/purchase' } },
   { key: 'car', icon: '🚗', title: 'Car Requisition', color: '#7a5b2f', links: { request: '/car-requests', approve: '/admin/car-requests', manage: '/admin/car-requests' } },
-  { key: 'inventory', icon: '📦', title: 'Inventory', color: '#6a3fa0', links: { entry: '/admin/inventory', view: '/admin/inventory', stock: '/admin/inventory', manage: '/admin/inventory' } }
+  { key: 'inventory', icon: '📦', title: 'Inventory', color: '#6a3fa0', links: { entry: '/admin/inventory', view: '/admin/inventory', stock: '/admin/inventory', manage: '/admin/inventory' } },
+  { key: 'fees', icon: '💰', title: 'Student Fees', color: '#d4a574', links: { manage: '/admin/fees', report: '/admin/fees/report' } }
 ];
 
 app.get('/dashboard', requireLogin, async (req, res) => {
@@ -455,9 +564,10 @@ app.get('/admin/pages', requireLogin, async (req, res) => {
     ['1', 'Auditorium approval', [['Approval requests', '/admin', 'Review and process auditorium permission requests.'], ['Auditoriums and approval route', '/admin/auditoriums/manage', 'Configure rooms, capacity, approval stages, and assigned officers.']]],
     ['2', 'Maintenance approval', [['Maintenance requests', '/admin/maintenance', 'Review and approve maintenance and repair submissions.'], ['Submit maintenance request', '/maintenance', 'Create a new maintenance request.']]],
     ['3', 'Purchase', [['Stationery item', '/purchase/stationary', 'Submit stationery items and add extra line items.'], ['Local purchase', '/purchase/local', 'Submit a local purchase request.'], ['Cleaning item', '/purchase/cleaning', 'Submit cleaning item requests.'], ['Purchase approvals', '/admin/purchase', 'Review and approve purchase requests.'], ['Approval workflow builder', '/admin/workflows', 'Configure amount bands and approval role routes per module.'], ['Approval log', '/admin/approvals-log', 'Audit trail of every approval action.'], ['Department stock', '/admin/purchase/stock', 'Department-wise stock register.'], ['Stock transactions', '/admin/purchase/stock/transactions', 'Ledger of every stock purchase, issue, return and adjustment.'], ['Purchase approval roles', '/admin/purchase/settings', 'Assign approval roles and amount rules.'], ['Purchase Excel tools', '/admin/purchase/export', 'Download purchase data or an import template.']]],
-    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users and roles', '/admin/departments', 'Manage users and their role assignments.']]],
+    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users and roles', '/admin/departments', 'Manage users and their role assignments.'], ['Module settings', '/admin/module-settings', 'Enable or disable request modules (auditorium, maintenance, car, purchase).']]],
     ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Car & driver fleet register', '/admin/car-fleet', 'Register the available cars and drivers.'], ['Users and roles', '/admin/departments', 'Create users and assign administrator and approval duties.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.']]],
     ['5', 'Inventory', [['Inventory register', '/admin/inventory', 'Record assets department-wise, floor-wise, and office-wise.'], ['Inventory template', '/admin/inventory/template', 'Download an Excel template for importing inventory.'], ['Inventory Excel', '/admin/inventory/export', 'Download all inventory data in one Excel sheet.']]],
+    ['8', 'Student Fees', [['Fees management', '/admin/fees', 'Upload student lists and bank payments, reconcile outstanding fees.'], ['Outstanding fees report', '/admin/fees/report', 'View detailed fees status for all students.']]],
     ['7', 'Reports', [['Reports dashboard', '/admin/reports', 'Consolidated activity across all modules.'], ['Monthly Excel report', '/admin/reports/export', 'Download all module data in one workbook.']]]
   ];
   const sections = groups.map(([number, title, pages]) => `<section class="directory-group"><div class="section-heading"><span>${number}</span><h2>${title}</h2></div><div class="page-directory">${pages.map(([pageTitle, href, description]) => `<a class="page-nav" href="${href}"><strong>${pageTitle}</strong><span>${description}</span> <b>↗</b></a>`).join('')}</div></section>`).join('');
@@ -499,6 +609,11 @@ const portalMenus = {
     { label: 'Inventory template', href: '/admin/inventory/template', desc: 'Download an Excel template for importing inventory.', level: 'manage' },
     { label: 'Inventory Excel', href: '/admin/inventory/export', desc: 'Download all inventory data in one Excel sheet.', level: 'manage' }
   ]},
+  fees: { icon: '💰', title: 'Student Fees', tagline: 'Upload student lists, bank payments, and track outstanding fees.', pages: [
+    { label: 'Fees dashboard', href: '/admin/fees', desc: 'Upload student lists and bank payments, view reconciliation status.', level: 'manage' },
+    { label: 'Outstanding fees report', href: '/admin/fees/report', desc: 'View students with pending fees and payment details.', level: 'manage' },
+    { label: 'Reconciliation log', href: '/admin/fees/reconcile', desc: 'Audit trail of fees reconciliation and matching.', level: 'manage' }
+  ]},
   reports: { icon: '📊', title: 'Reports', tagline: 'Consolidated activity across all modules.', pages: [
     { label: 'Reports dashboard', href: '/admin/reports', desc: 'Consolidated activity across all modules.', level: 'manage' },
     { label: 'Monthly Excel report', href: '/admin/reports/export', desc: 'Download all module data in one workbook.', level: 'manage' }
@@ -508,6 +623,7 @@ const portalMenus = {
     { label: 'Users and roles', href: '/admin/departments', desc: 'Add, edit, and delete users; assign each role.', level: 'manage' },
     { label: 'Permissions matrix', href: '/admin/permissions', desc: 'Configure which roles can access each module and how.', level: 'manage' },
     { label: 'Role guide', href: '/admin/role-guide', desc: 'Edit who should be given which login.', level: 'manage' },
+    { label: 'Module settings', href: '/admin/module-settings', desc: 'Enable or disable request modules.', level: 'manage' },
     { label: 'Audit log', href: '/admin/audit-logs', desc: 'Every administrative action, logged for accountability.', level: 'manage' },
     { label: 'Approval workflow builder', href: '/admin/workflows', desc: 'Configure amount bands and approval role routes per module.', level: 'manage' },
     { label: 'Approval log', href: '/admin/approvals-log', desc: 'Audit trail of every approval action.', level: 'manage' },
@@ -544,12 +660,19 @@ const roleNames = {
 const roleOptionsForUser = (selected) => ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${escapeHtml(roleNames[role] || role)}</option>`).join('');
 
 const userRowTemplate = (candidate, currentUser, departmentOptions, prefix = 'all') => {
-  const formId = `user-form-${prefix}-${encodeURIComponent(candidate.id).replace(/%/g, '_')}`;
+  const formId = `user-form-${prefix}-${encodeURIComponent(candidate.id).replace(/%/g, '_')}_${candidate.department.replace(/[^a-z0-9]/gi, '_')}_${candidate.role || ''}`;
+  const isAssignment = Boolean(candidate._assignment_id);
   const canDelete = candidate.id !== currentUser.id;
-  const isDisabled = Boolean(candidate.is_disabled);
-  const statusBadge = isDisabled
-    ? '<span class="status rejected" style="font-size:11px;padding:3px 7px">Disabled</span>'
-    : '<span class="status approved" style="font-size:11px;padding:3px 7px">Active</span>';
+  const isDisabled = isAssignment ? false : Boolean(candidate.is_disabled);
+  const statusBadge = isAssignment
+    ? '<span class="status approved" style="font-size:11px;padding:3px 7px;background:#666">Extra role</span>'
+    : (isDisabled
+        ? '<span class="status rejected" style="font-size:11px;padding:3px 7px">Disabled</span>'
+        : '<span class="status approved" style="font-size:11px;padding:3px 7px">Active</span>');
+  const multiRoleNote = isAssignment ? '<span class="small-copy" style="display:block;font-size:11px;color:var(--orange)">Additional role for this email</span>' : '';
+  if (isAssignment) {
+    return `<tr><td><strong>${escapeHtml(candidate.id)}</strong>${multiRoleNote}</td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td>${statusBadge}</td><td class="user-actions"><button form="${formId}" class="small-button" type="submit">Save</button> <button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/assignment/delete" formmethod="post" onclick="return confirm('Remove this extra role (${escapeHtml(candidate.role)}) for ${escapeHtml(candidate.id)}?')">Remove role</button></td></tr>`;
+  }
   return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td>${statusBadge}</td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/toggle" formmethod="post" onclick="return confirm('${isDisabled ? 'Enable this user account?' : 'Disable this user account? The user will not be able to log in.'}')">${isDisabled ? 'Enable' : 'Disable'}</button><button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post" onclick="return confirm('Are you sure you want to delete this user permanently?')">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
 };
 
@@ -583,7 +706,9 @@ function adminNavBar(activePath, user) {
     { label: '🏛️ Approvals Desk', path: '/admin' },
     { label: '🏛️ Manage Rooms', path: '/admin/auditoriums/manage', adminOnly: true },
     { label: '👥 Users & Roles', path: '/admin/departments', adminOnly: true },
-    { label: '🔧 Maintenance', path: '/admin/maintenance' },
+    { label: '⚙️ Module Settings', path: '/admin/module-settings', adminOnly: true },
+    { label: '� Student Fees', path: '/admin/fees', adminOnly: true },
+    { label: '�🔧 Maintenance', path: '/admin/maintenance' },
     { label: '🛒 Purchase', path: '/admin/purchase' },
     { label: '🚗 Car Requests', path: '/admin/car-requests' },
     { label: '📦 Inventory', path: '/admin/inventory' },
@@ -624,6 +749,7 @@ app.use((req, res, next) => {
 app.get('/admin', requireLogin, async (req, res) => {
   const user = req.session.user;
   const auditoriumConfigs = await getAuditoriumConfigs();
+  const requestPageEnabled = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
   let stock = [];
   try { stock = await getPurchaseStock(); } catch (e) { console.error(`Stock fetch error: ${e.message}`); }
   const guideRows = await getRoleGuide();
@@ -645,7 +771,57 @@ app.get('/admin', requireLogin, async (req, res) => {
     return `<tr><td><strong>${escapeHtml(aud.name)}</strong></td><td>${escapeHtml(aud.capacity || 300)}</td><td><span class="status ${isLocked ? 'rejected' : 'approved'}">${isLocked ? 'Disabled' : 'Enabled'}</span></td><td><form action="/admin/auditoriums/${aud.id}/lock" method="post" style="display:inline"><button class="small-button" type="submit" onclick="return confirm('${isLocked ? 'Enable this auditorium for bookings?' : 'Disable this auditorium from bookings?'}')">${isLocked ? 'Enable' : 'Disable'}</button></form> <form action="/admin/auditoriums/${aud.id}/delete" method="post" style="display:inline"><button class="small-button reject-button" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form></td></tr>`;
   }).join('');
   const requestHead = isAdmin(user) ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin', user)}<section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${isAdmin(user) ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><p class="small-copy">${auditoriums.filter(a => !a.is_locked).length} enabled room(s) available on the public request form.</p><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Auditorium</th><th>Capacity</th><th>Status</th><th>Actions</th></tr></thead><tbody>${auditoriumRows || '<tr><td colspan="4">No auditoriums registered.</td></tr>'}</tbody></table></div><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><input name="capacity" type="number" min="1" value="300" placeholder="Capacity" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}</style></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin', user)}<section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${isAdmin(user) ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage users and roles ↗</a></div><p class="small-copy">Request page is currently <strong>${requestPageEnabled ? 'Enabled' : 'Disabled'}</strong> for users. <a class="page-nav" href="/">View request page</a></p><form class="create-user" action="/admin/request-page/toggle" method="post" style="margin:0 0 16px"><button class="${requestPageEnabled ? 'reject-button' : ''}" type="submit" onclick="return confirm('${requestPageEnabled ? 'Disable the request page? Users will not be able to submit new auditorium requests.' : 'Enable the request page so users can submit new auditorium requests?'}')">${requestPageEnabled ? 'Disable request page' : 'Enable request page'}</button></form><p class="small-copy">${auditoriums.filter(a => !a.is_locked).length} enabled room(s) available on the public request form.</p><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Auditorium</th><th>Capacity</th><th>Status</th><th>Actions</th></tr></thead><tbody>${auditoriumRows || '<tr><td colspan="4">No auditoriums registered.</td></tr>'}</tbody></table></div><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><input name="capacity" type="number" min="1" value="300" placeholder="Capacity" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
+});
+
+app.post('/admin/request-page/toggle', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const current = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
+  await setSystemSetting('REQUEST_PAGE_ENABLED', current ? 'false' : 'true');
+  res.redirect('/admin');
+});
+
+// Toggle endpoints for all modules
+app.post('/admin/modules/:module/toggle', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const moduleKey = req.params.module;
+  const settingMap = {
+    auditorium: 'REQUEST_PAGE_ENABLED',
+    maintenance: 'MAINTENANCE_PAGE_ENABLED',
+    car: 'CAR_PAGE_ENABLED',
+    purchase: 'PURCHASE_PAGE_ENABLED'
+  };
+  const settingKey = settingMap[moduleKey];
+  if (!settingKey) return res.status(400).send('Invalid module key.');
+  const current = (await getSystemSetting(settingKey)) !== 'false';
+  await setSystemSetting(settingKey, current ? 'false' : 'true');
+  res.redirect('/admin/module-settings');
+});
+
+// Admin settings page for enabling/disabling modules
+app.get('/admin/module-settings', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const modules = [
+    { key: 'auditorium', icon: '🏛️', title: 'Auditorium Requests', desc: 'Enable/disable auditorium request submissions' },
+    { key: 'maintenance', icon: '🔧', title: 'Maintenance Requests', desc: 'Enable/disable maintenance request submissions' },
+    { key: 'car', icon: '🚗', title: 'Car Requisition Requests', desc: 'Enable/disable car request submissions' },
+    { key: 'purchase', icon: '🛒', title: 'Purchase Requests', desc: 'Enable/disable purchase request submissions' }
+  ];
+  
+  const moduleRows = await Promise.all(modules.map(async (module) => {
+    const enabled = await isRequestPageEnabled(module.key);
+    const status = enabled ? '<span class="status approved">Enabled</span>' : '<span class="status rejected">Disabled</span>';
+    return `<tr>
+      <td>${module.icon}</td>
+      <td><strong>${escapeHtml(module.title)}</strong><br><span class="small-copy">${escapeHtml(module.desc)}</span></td>
+      <td>${status}</td>
+      <td><form action="/admin/modules/${module.key}/toggle" method="post" style="display:inline">
+        <button class="small-button ${enabled ? 'reject-button' : ''}" type="submit" onclick="return confirm('${enabled ? 'Disable' : 'Enable'} ${escapeHtml(module.title)}?')">${enabled ? 'Disable' : 'Enable'}</button>
+      </form></td>
+    </tr>`;
+  }));
+  
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Module Settings | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Module<br><em>settings</em></h1></div><a class="page-nav" href="/admin">Back to admin</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/module-settings', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Enable or disable request modules.</h2><p class="lede">Control which request types are available to users. When disabled, users will see a message that requests are temporarily closed.</p></section><section class="table-wrap"><table><thead><tr><th style="width:60px;text-align:center">Icon</th><th>Module</th><th style="width:120px">Status</th><th style="width:100px">Action</th></tr></thead><tbody>${moduleRows.join('')}</tbody></table></section></main></body></html>`);
 });
 
 app.post('/admin/auditoriums', requireLogin, async (req, res) => {
@@ -658,7 +834,7 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
     const { error } = await supabase.from('auditoriums').insert({ name, capacity });
     if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Database setup required. Run supabase/schema.sql in the Supabase SQL Editor.' : error.message);
   } else if (!localAuditoriums.some((auditorium) => auditorium.name === name)) {
-    localAuditoriums.push({ id: Date.now(), name, capacity, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' });
+    localAuditoriums.push({ id: Date.now(), name, capacity, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' });
   }
   res.redirect('/admin');
 });
@@ -669,12 +845,12 @@ app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   const allUsers = await getUsers();
   const principals = allUsers.filter((u) => u.role === 'principal');
   const maintenanceUsers = allUsers.filter((u) => u.role === 'maintenance');
-  const roleOptions = (selected) => ['none', 'head', 'electrician', 'principal', 'maintenance'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${role}</option>`).join('');
+  const roleOptions = (selected) => ['none', 'head', 'electrician', 'principal', 'maintenance', 'chairman', 'admin_officer', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${role === 'none' ? '— None' : escapeHtml(roleNames[role] || role)}</option>`).join('');
   const userOptions = (users, selected, label) => {
     const noneOption = `<option value="">-- None (${label}) --</option>`;
     return noneOption + users.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
   };
-  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span style="color:var(--orange)">Locked: disabled from request form</span><button type="submit" onclick="return confirm('Enable and unlock this auditorium?')">Unlock (Enable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit" onclick="return confirm('Save changes to this auditorium?')">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit" onclick="return confirm('Disable and lock this auditorium from the public request form?')">Lock (Disable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>`).join('');
+  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span style="color:var(--orange)">Locked: disabled from request form</span><button type="submit" onclick="return confirm('Enable and unlock this auditorium?')">Unlock (Enable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><input name="min_students" type="number" min="1" value="${escapeHtml(auditorium.min_students || 1)}" aria-label="Minimum Students" placeholder="Min students" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit" onclick="return confirm('Save changes to this auditorium?')">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit" onclick="return confirm('Disable and lock this auditorium from the public request form?')">Lock (Disable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>`).join('');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure approval roles, assign Principal and Maintenance Officer per auditorium, lock (disable) or delete a room permanently.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
 });
 
@@ -684,9 +860,11 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   if (!current) return res.status(404).send('Auditorium not found.');
   if (current.is_locked) return res.status(409).send('Unlock the auditorium before editing it.');
   const capacity = Number(req.body.capacity);
-  const values = { name: String(req.body.name || '').trim(), capacity, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
+  const minStudents = Number(req.body.min_students);
+  const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
   if (!values.name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
+  if (!Number.isInteger(minStudents) || minStudents < 1) return res.status(400).send('Minimum students must be a positive whole number.');
   if (supabase) {
     const { error } = await supabase.from('auditoriums').update(values).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -725,6 +903,9 @@ app.post('/admin/auditoriums/:id/lock', requireLogin, async (req, res) => {
 app.get('/admin/departments', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const allUsers = await getUsers();
+  const roleAssignments = await getRoleAssignments();
+  const assignedRows = (roleAssignments || []).map((a) => ({ id: a.user_id, _assignment_id: a.id, name: a.name || '', department: a.department, role: a.role, is_disabled: false, password: '' }));
+  const mergedUsers = [...allUsers, ...assignedRows.filter((a) => !allUsers.some((u) => u.id === a.id && u.department === a.department && u.role === a.role))];
   const currentUser = req.session.user.id;
   const fetchedDepartments = await getDepartments();
   const departments = fetchedDepartments && fetchedDepartments.length ? fetchedDepartments : localDepartments;
@@ -735,15 +916,15 @@ app.get('/admin/departments', requireLogin, async (req, res) => {
   };
 
   const workspacePanels = workspaceTabs.map((tab) => {
-    const list = allUsers.filter((user) => tab.roles.includes(user.role));
+    const list = mergedUsers.filter((user) => tab.roles.includes(user.role));
     return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions, tab.key)).join('') : '<tr><td colspan="6">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
   }).join('');
 
-  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${allUsers.length})</button>${workspaceTabs.map((tab) => { const count = allUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
+  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${mergedUsers.length})</button>${workspaceTabs.map((tab) => { const count = mergedUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
 
   const roleSelectOptions = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}">${roleNames[role]}</option>`).join('');
 
-  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(allUsers, currentUser, departmentOptions, 'all')}</section>`;
+  const allTab = `<section class="workspace-users" id="tab-all" data-workspace="all">${usersTable(mergedUsers, currentUser, departmentOptions, 'all')}</section>`;
 
   const imported = Number(req.query.imported || 0);
   const importNote = imported > 0 ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">Imported/updated ${imported} department(s) from Excel.</p>` : '';
@@ -941,8 +1122,8 @@ function requestStatus(request, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
   if (!transition) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
-  const roleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance' };
-  let pendingLabel = roleNames[transition.role] || transition.role;
+  const stepRoleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance officer', chairman: 'Chairman', admin_officer: 'Admin officer', higher_authority: 'Higher authority', purchase_officer: 'Purchase officer', work_done: 'Work Inspector', department_user: 'Department staff' };
+  let pendingLabel = stepRoleNames[transition.role] || moduleRoleLabel(transition.role) || transition.role;
   if (transition.role === 'principal' && auditorium.principal_user_id) pendingLabel += ` (${escapeHtml(auditorium.principal_user_id)})`;
   if (transition.role === 'maintenance' && auditorium.maintenance_user_id) pendingLabel += ` (${escapeHtml(auditorium.maintenance_user_id)})`;
   return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span><small>Pending: ${pendingLabel}</small>`;
@@ -1017,8 +1198,22 @@ app.post('/admin/users', requireLogin, async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
   if (!req.body.name || !req.body.department || !req.body.role) return res.status(400).send('Name, department, and role are required.');
   const password = String(req.body.password || '').trim();
+  const role = req.body.role;
+  const department = String(req.body.department).trim();
   const currentUsers = await getUsers();
   const existing = currentUsers.find((user) => user.id === email) || users.find((user) => user.id === email);
+
+  if (existing && (existing.role !== role || existing.department !== department)) {
+    if (password && password.length < 6) return res.status(400).send('Password must be at least 6 characters.');
+    try {
+      await saveRoleAssignment(email, String(req.body.name).trim(), department, role);
+    } catch (error) {
+      return res.status(500).send(`Could not save role assignment: ${error.message}`);
+    }
+    const msg = existing.role === role ? `User updated successfully.` : `Added role "${role}" for ${email} (this email now has multiple roles).`;
+    return res.redirect('/admin/departments?msg=' + encodeURIComponent(msg));
+  }
+
   if (!existing && (!password || password.length < 6)) {
     return res.status(400).send('Password must be at least 6 characters.');
   }
@@ -1028,8 +1223,8 @@ app.post('/admin/users', requireLogin, async (req, res) => {
   const values = {
     id: email,
     name: String(req.body.name).trim(),
-    department: String(req.body.department).trim(),
-    role: req.body.role,
+    department,
+    role,
     password: password || (existing ? existing.password : '')
   };
   const localIndex = users.findIndex((user) => user.id === email);
@@ -1089,6 +1284,10 @@ app.post('/admin/users/import', requireLogin, upload.single('users_file'), async
       if (reason) return res.status(400).send(`Invalid Excel row ${rowIndex + 2}: ${reason}. Required columns: Email, Name, Department, Role, Password.`);
       const values = { id: email, name: String(row.name).trim(), department: String(row.department).trim(), role };
       if (password) values.password = password;
+      if (existing && (existing.role !== role || existing.department !== values.department)) {
+        await saveRoleAssignment(email, values.name, values.department, role);
+        continue;
+      }
       if (existing) Object.assign(existing, values);
       else currentUsers.push(values);
       const localUser = users.find((user) => user.id === email);
@@ -1188,29 +1387,62 @@ app.post('/admin/users/:id/toggle', requireLogin, async (req, res) => {
   res.redirect('/admin/departments?msg=' + encodeURIComponent(willBeDisabled ? `Account ${req.params.id} has been disabled.` : `Account ${req.params.id} has been enabled.`));
 });
 
-const roleGuideRoles = [
-  ['admin', 'Admin'], ['sub_admin', 'Sub admin'], ['admin_officer', 'Admin officer'], ['purchase_officer', 'Purchase officer'],
-  ['purchase_clerk', 'Purchase clerk'], ['chairman', 'Chairman'], ['department_user', 'Department staff'],
-  ['head', 'Department head'], ['maintenance', 'Maintenance officer'], ['electrician', 'Electrician'],
-  ['principal', 'Principal'], ['higher_authority', 'Higher authority'], ['work_done', 'Work Inspector']
-];
+app.post('/admin/users/:id/assignment', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const userId = req.params.id;
+  const name = String(req.body.name || '').trim();
+  const department = String(req.body.department || '').trim();
+  const role = req.body.role;
+  if (!name || !department || !role) return res.status(400).send('Name, department, and role are required.');
+  try {
+    await saveRoleAssignment(userId, name, department, role);
+  } catch (error) {
+    return res.status(500).send(`Could not save role assignment: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent(`Role "${role}" updated for ${userId}.`));
+});
 
-const roleGuideCheckboxes = (fieldName, selectedValue) => {
-  const haystack = String(selectedValue || '').toLowerCase();
-  return roleGuideRoles.map(([key, label]) => {
-    const keyHit = new RegExp(`\\b${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(haystack);
-    const words = label.toLowerCase().replace(/[^a-z ]/g, ' ').trim().split(/\s+/).filter(Boolean);
-    const labelHit = words.length > 1 && new RegExp(`\\b${words.join('\\s+')}\\b`).test(haystack);
-    const checked = keyHit || labelHit;
-    return `<label class="chk"><input type="checkbox" name="${fieldName}" value="${key}"${checked ? ' checked' : ''}><span>${escapeHtml(label)}</span></label>`;
-  }).join('');
+app.post('/admin/users/:id/assignment/delete', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const userId = req.params.id;
+  const department = String(req.body.department || '').trim();
+  const role = req.body.role;
+  try {
+    await deleteRoleAssignment(userId, department, role);
+  } catch (error) {
+    return res.status(500).send(`Could not remove role assignment: ${error.message}`);
+  }
+  res.redirect('/admin/departments?msg=' + encodeURIComponent(`Role "${role}" removed for ${userId}.`));
+});
+
+const roleGuideApprovalRoles = [
+  ['none', '—'], ['head', 'Department Head'], ['electrician', 'Electrician'], ['principal', 'Principal'],
+  ['maintenance', 'Maintenance Officer'], ['chairman', 'Chairman'], ['admin_officer', 'Admin Officer'],
+  ['higher_authority', 'Higher Authority'], ['purchase_officer', 'Purchase Officer'], ['purchase_clerk', 'Purchase Clerk'],
+  ['work_done', 'Work Inspector'], ['department_user', 'Department Staff'], ['sub_admin', 'Sub Admin'], ['admin', 'Admin']
+];
+const roleGuideStageOptions = (selectedValue) => roleGuideApprovalRoles.map(([key, label]) => `<option value="${key}"${key === selectedValue ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+const roleGuideStageSelect = (fieldName, selectedValue) => `<select name="${fieldName}">${roleGuideStageOptions(String(selectedValue || ''))}</select>`;
+const approvalStages = (giveLogin) => {
+  const value = String(giveLogin || '');
+  const parts = value.includes('|') ? value.split('|').map((s) => s.trim()) : value.split('+').map((s) => s.trim());
+  return parts.map((part) => {
+    const match = part.match(/\(([a-z_]+)\)\s*$/i);
+    return match ? match[1] : part;
+  });
 };
+
+const ordinal = (n) => (n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : n + 'th');
 
 app.get('/admin/role-guide', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const rows = await getRoleGuide();
-  const rowForms = rows.map((row, index) => `<tr><td><input name="sort_order[]" type="number" min="0" step="1" value="${escapeHtml(row.sort_order ?? '')}"></td><td><input name="part[]" type="text" value="${escapeHtml(row.part || '')}" placeholder="e.g. Auditorium approval"></td><td class="role-select-cell"><div class="chk-wrap">${roleGuideCheckboxes('give_login_' + index + '[]', row.give_login)}</div></td><td><input name="what[]" type="text" value="${escapeHtml(row.what || '')}" placeholder="What they can do"></td><td class="actions-cell">${row.id ? `<input name="id[]" type="hidden" value="${escapeHtml(row.id)}"><button class="small-button" type="button" onclick="removeRow(this)">Delete</button>` : '<button class="small-button" type="button" onclick="removeRow(this)">Delete</button>'}</td></tr>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Role guide | Admin</title><link rel="stylesheet" href="/styles.css"><style>.role-guide-settings .user-management{padding:0}.role-guide-settings table input[type="text"],.role-guide-settings table input[type="number"]{width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}input[name="sort_order[]"]{max-width:72px}.role-guide-settings td{vertical-align:top}.role-select-cell{min-width:260px}.chk-wrap{display:flex;flex-wrap:wrap;gap:6px}.chk{display:inline-flex;align-items:center;gap:4px;font:12px Arial,sans-serif;border:1px solid var(--line);border-radius:4px;padding:5px 8px;cursor:pointer;user-select:none}.chk input{width:auto;margin:0}.chk:has(input:checked){border-color:var(--orange);background:var(--orange);color:#fff}.actions-cell{white-space:nowrap}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Role<br><em>guide</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Dynamic guide</p><h2>Who should get which login.</h2><p class="lede">For each row, tick the role(s) that should get the login. The selected roles are combined and shown on the main page.</p></section><section class="user-management role-guide-settings"><div class="admin-tools"><a class="page-nav" href="/admin/pages">Back to admin pages</a><button class="small-button" form="role-guide-form" type="submit">Save all rows</button><button class="small-button" type="button" onclick="addRow()">+ Add row</button></div><form id="role-guide-form" action="/admin/role-guide" method="post"><div class="table-wrap"><table><thead><tr><th>#</th><th>Part</th><th>Give login to</th><th>What they can do</th><th></th></tr></thead><tbody>${rowForms || '<tr><td colspan="5">No guide rows yet.</td></tr>'}</tbody></table></div></form></section></main><script>function addRow(){const tbody=document.querySelector('#role-guide-form tbody');const idx=tbody.querySelectorAll('tr').length;const tr=document.createElement('tr');tr.innerHTML='<td><input name="sort_order[]" type="number" min="0" step="1"></td><td><input name="part[]" type="text" placeholder="e.g. Auditorium approval"></td><td class="role-select-cell"><div class="chk-wrap">${roleGuideCheckboxes("give_login_idx[]", '')}</div></td><td><input name="what[]" type="text" placeholder="What they can do"></td><td class="actions-cell"><button class="small-button" type="button" onclick="removeRow(this)">Delete</button></td>';tr.innerHTML=tr.innerHTML.split('give_login_idx[]').join('give_login_'+idx+'[]');tbody.appendChild(tr);}function removeRow(btn){const tr=btn.closest('tr');const hid=tr.querySelector('input[name="id[]"]');if(hid&&document.querySelectorAll('#role-guide-form tbody tr').length>1){if(confirm('Delete this saved row?')){const f=document.createElement('form');f.method='post';f.action='/admin/role-guide/'+hid.value+'/delete';document.body.appendChild(f);f.submit();}}else{tr.remove();}}</script></body></html>`);
+  const stagesList = rows.map((row) => approvalStages(row.give_login));
+  const stageCount = Math.max(4, ...stagesList.map((s) => s.length));
+  const stageCells = (index, stages) => Array.from({ length: stageCount }, (_, s) => `<td class="stage-cell">${roleGuideStageSelect('approval_' + (s + 1) + '_' + index, stages[s])}</td>`).join('');
+  const stageHeaders = Array.from({ length: stageCount }, (_, s) => `<th class="stage-head"><span class="stage-label">${ordinal(s + 1)} Approval</span><button class="col-del" type="button" onclick="removeStageColumn(this)" title="Delete this column">×</button></th>`).join('');
+  const rowForms = rows.map((row, index) => `<tr><td><input name="sort_order[]" type="number" min="0" step="1" value="${escapeHtml(row.sort_order ?? '')}"></td><td><input name="part[]" type="text" value="${escapeHtml(row.part || '')}" placeholder="e.g. Auditorium approval"></td>${stageCells(index, approvalStages(row.give_login))}<td><input name="what[]" type="text" value="${escapeHtml(row.what || '')}" placeholder="What they can do"></td><td class="actions-cell">${row.id ? `<input name="id[]" type="hidden" value="${escapeHtml(row.id)}"><button class="small-button" type="button" onclick="removeRow(this)">Delete</button>` : '<button class="small-button" type="button" onclick="removeRow(this)">Delete</button>'}</td></tr>`).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Role guide | Admin</title><link rel="stylesheet" href="/styles.css"><style>.role-guide-settings .user-management{padding:0}.role-guide-settings table input[type="text"],.role-guide-settings table input[type="number"],.role-guide-settings table select{width:100%;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}input[name="sort_order[]"]{max-width:72px}.role-guide-settings td{vertical-align:top}.stage-cell{min-width:120px}.stage-cell select{cursor:pointer}.stage-cell select:focus{border-color:var(--orange);outline:none}.stage-head{position:relative;padding-right:26px;min-width:120px}.stage-head .stage-label{display:inline-block;white-space:nowrap}.col-del{position:absolute;top:5px;right:5px;width:18px;height:18px;line-height:15px;border:1px solid var(--line);background:transparent;color:var(--orange);cursor:pointer;font:bold 12px Arial;border-radius:50%;padding:0}.col-del:hover{border-color:var(--orange);background:var(--orange);color:#fff}.actions-cell{white-space:nowrap}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Role<br><em>guide</em></h1></div><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Dynamic guide</p><h2>Who should get which login.</h2><p class="lede">Assign an approval role for each stage using the dropdowns. Add extra approval columns for longer routes with "Add approval column", remove one with its × button, and save all rows when done.</p></section><section class="user-management role-guide-settings"><div class="admin-tools"><a class="page-nav" href="/admin/pages">Back to admin pages</a><button class="small-button" form="role-guide-form" type="submit">Save all rows</button><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button><button class="small-button" type="button" onclick="addRow()">+ Add row</button></div><form id="role-guide-form" action="/admin/role-guide" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><div class="table-wrap"><table><thead><tr><th>#</th><th>Part</th>${stageHeaders}<th>What they can do</th><th></th></tr></thead><tbody>${rowForms || ('<tr><td colspan="' + (4 + stageCount) + '">No guide rows yet.</td></tr>')}</tbody></table></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}function stageSelectHTML(name){const opts=[['none','—'],['head','Department Head'],['electrician','Electrician'],['principal','Principal'],['maintenance','Maintenance Officer'],['chairman','Chairman'],['admin_officer','Admin Officer'],['higher_authority','Higher Authority'],['purchase_officer','Purchase Officer'],['purchase_clerk','Purchase Clerk'],['work_done','Work Inspector'],['department_user','Department Staff'],['sub_admin','Sub Admin'],['admin','Admin']];return '<select name="'+name+'">'+opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('')+'</select>';}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function addStageColumn(){var tbody=document.querySelector('#role-guide-form tbody');var theadTr=document.querySelector('#role-guide-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)" title="Delete this column">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);var rows=Array.prototype.slice.call(tbody.rows);rows.forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=stageSelectHTML('approval_'+currentStages+'_'+rowIndexOf(tr));tr.insertBefore(td,tr.cells[tr.cells.length-2]);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);var tbody=document.querySelector('#role-guide-form tbody');Array.prototype.slice.call(tbody.rows).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;reindexStages();document.getElementById('stage_count').value=currentStages;}function reindexStages(){var theadTr=document.querySelector('#role-guide-form thead tr');var stageThs=Array.prototype.slice.call(theadTr.querySelectorAll('th.stage-head'));currentStages=stageThs.length;var tbody=document.querySelector('#role-guide-form tbody');stageThs.forEach(function(th,ci){th.querySelector('.stage-label').textContent=ordinal(ci+1)+' Approval';Array.prototype.slice.call(tbody.rows).forEach(function(tr){var sel=tr.querySelectorAll('td.stage-cell select')[ci];if(sel)sel.name='approval_'+(ci+1)+'_'+rowIndexOf(tr);});});document.getElementById('stage_count').value=currentStages;}function addRow(){const tbody=document.querySelector('#role-guide-form tbody');const idx=tbody.querySelectorAll('tr').length;const tr=document.createElement('tr');var cells='<td><input name="sort_order[]" type="number" min="0" step="1"></td><td><input name="part[]" type="text" placeholder="e.g. Auditorium approval"></td>';for(var s=1;s<=currentStages;s++){cells+='<td class="stage-cell">'+stageSelectHTML('approval_'+s+'_idx')+'</td>';}cells+='<td><input name="what[]" type="text" placeholder="What they can do"></td><td class="actions-cell"><button class="small-button" type="button" onclick="removeRow(this)">Delete</button></td>';tr.innerHTML=cells;tr.innerHTML=tr.innerHTML.replace(/approval_\d+_idx/g,function(m){return 'approval_'+parseInt(m.match(/\d+/)[0],10)+'_'+idx;});tbody.appendChild(tr);}function removeRow(btn){const tr=btn.closest('tr');const hid=tr.querySelector('input[name="id[]"]');if(hid&&document.querySelectorAll('#role-guide-form tbody tr').length>1){if(confirm('Delete this saved row?')){const f=document.createElement('form');f.method='post';f.action='/admin/role-guide/'+hid.value+'/delete';document.body.appendChild(f);f.submit();}}else{tr.remove();}}</script></body></html>`);
 });
 
 app.post('/admin/role-guide', requireLogin, async (req, res) => {
@@ -1220,11 +1452,15 @@ app.post('/admin/role-guide', requireLogin, async (req, res) => {
   const parts = Array.isArray(req.body.part) ? req.body.part : [req.body.part];
   const whats = Array.isArray(req.body.what) ? req.body.what : [req.body.what];
   const length = Math.max(ids.length, orders.length, parts.length, whats.length);
+  const stageCount = Math.max(1, parseInt(req.body.stage_count, 10) || 4);
   const giveLoginForRow = (index) => {
-    const selected = req.body['give_login_' + index];
-    if (selected === undefined) return '';
-    const list = (Array.isArray(selected) ? selected : [selected]).filter(Boolean);
-    return list.map((key) => (roleNames[key] ? `${roleNames[key]} (${key})` : key)).join(' + ');
+    const stages = [];
+    for (let stage = 1; stage <= stageCount; stage += 1) {
+      const value = String(req.body['approval_' + stage + '_' + index] || '').trim();
+      stages.push(value === 'none' ? '' : (roleNames[value] ? `${roleNames[value]} (${value})` : value));
+    }
+    while (stages.length && stages[stages.length - 1] === '') stages.pop();
+    return stages.join(' | ');
   };
   if (supabase) {
     for (let index = 0; index < length; index += 1) {
@@ -1563,6 +1799,9 @@ app.get('/api/requests', async (req, res) => {
 });
 
 app.post('/requests', async (req, res) => {
+  if ((await getSystemSetting('REQUEST_PAGE_ENABLED')) === 'false') {
+    return res.status(403).send('The auditorium request page is currently disabled by an administrator. Please try again later.');
+  }
   const slotDatesValue = req.body.slot_date ?? req.body['slot_date[]'] ?? req.body.date;
   const slotStartTimesValue = req.body.slot_start_time ?? req.body['slot_start_time[]'] ?? req.body.start_time ?? '';
   const slotEndTimesValue = req.body.slot_end_time ?? req.body['slot_end_time[]'] ?? req.body.end_time ?? '';
@@ -1604,6 +1843,12 @@ app.post('/requests', async (req, res) => {
   if (request.duration !== '1 day' && (!request.end_date || request.end_date < request.date)) return res.status(400).send('Please choose a valid end date.');
 
   if (!(await getAuditoriums()).includes(request.auditorium)) return res.status(400).send('Please choose an available auditorium.');
+
+  // Validate minimum students requirement
+  const selectedAuditorium = (await getAuditoriumConfigs()).find((a) => a.name === request.auditorium);
+  if (selectedAuditorium && selectedAuditorium.min_students && request.student_count < selectedAuditorium.min_students) {
+    return res.status(400).send(`${selectedAuditorium.name} requires a minimum of ${selectedAuditorium.min_students} students. You entered ${request.student_count}.`);
+  }
 
   let existingRequests = requests;
   if (supabase) {
@@ -1690,6 +1935,7 @@ async function getAuditoriumBookings() {
 }
 
 app.get('/maintenance', async (req, res) => {
+  if (!(await isRequestPageEnabled('maintenance'))) return renderClosedRequestPage(req, res, 'maintenance');
   const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'maintenance.html'), 'utf8');
   const departments = await getDepartments();
   const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
@@ -1697,6 +1943,7 @@ app.get('/maintenance', async (req, res) => {
 });
 
 app.post('/maintenance', async (req, res) => {
+  if (!(await isRequestPageEnabled('maintenance'))) return res.status(403).send('This request page is currently disabled by an administrator. Please try again later.');
   const request = {
     location: String(req.body.location || '').trim(),
     category: req.body.category,
@@ -1830,12 +2077,14 @@ app.use('/car-requests', (req, res, next) => {
 });
 
 app.get('/car-requests', async (req, res) => {
+  if (!(await isRequestPageEnabled('car'))) return renderClosedRequestPage(req, res, 'car');
   const departments = await getDepartments();
   const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Car request | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell"><div class="college-heading"><h1>SVIT VASAD</h1></div><div class="request-layout"><aside class="side-panel"><h2>Car<br><em>Requests</em></h2><p class="sub-title">Request an official vehicle for campus work.</p><div class="rule"></div><nav class="nav-buttons"><a href="/" class="nav-btn"><span class="btn-icon">🏠</span> Back to main page</a><a href="/" class="nav-btn"><span class="btn-icon">🏛️</span> Auditorium Permission</a><a href="/maintenance" class="nav-btn"><span class="btn-icon">🔧</span> Maintenance Request</a><a href="/purchase/local" class="nav-btn"><span class="btn-icon">🏪</span> Local Purchase</a><a href="/purchase/stationary" class="nav-btn"><span class="btn-icon">📦</span> Stationery Item</a><a href="/purchase/cleaning" class="nav-btn"><span class="btn-icon">🧹</span> Cleaning Item</a><a href="/car-requests" class="nav-btn active"><span class="btn-icon">🚗</span> Car Request</a><a href="/login" class="nav-btn"><span class="btn-icon">🔐</span> Sign in</a></nav></aside><section class="main-content"><p class="eyebrow">Request form 04</p><h1>Car<br><em>request</em></h1><p class="lede">Request an official vehicle for college travel, field work, or an approved campus programme.</p><form class="request-form" action="/car-requests" method="post"><div class="section-heading"><span>01</span><h3>Travel details</h3></div><div class="form-grid"><label>Department<select name="department" required><option value="">Select department</option>${departmentOptions}</select></label><label>Purpose<input name="purpose" placeholder="e.g. Official campus visit" required></label><label>Travel date<input name="travel_date" type="date" required></label><label>Passenger count<input name="passenger_count" type="number" min="1" required></label><label>Pickup location<input name="pickup_location" placeholder="e.g. SVIT Vasad" required></label><label>Destination<input name="destination" placeholder="e.g. Ahmedabad" required></label><label>Pickup time<input name="pickup_time" type="time" required></label><label>Return time<input name="return_time" type="time"></label></div><div class="section-heading"><span>02</span><h3>Requester details</h3></div><div class="form-grid"><label>Name<input name="requester_name" placeholder="Full name" required></label><label>Mobile number<input name="requester_mobile" type="tel" pattern="[0-9]{10}" placeholder="10-digit mobile number" required></label><label>Email address<input name="requester_email" type="email" placeholder="name@svitvasad.ac.in" required></label><label>Additional notes<textarea name="remarks" placeholder="Any driver, luggage, or accessibility details"></textarea></label></div><button type="submit">Send car request <span>↗</span></button></form></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main>${req.query.submitted === '1' ? '<script>alert("Car request submitted successfully.");</script>' : ''}</body></html>`);
 });
 
 app.post('/car-requests', async (req, res) => {
+  if (!(await isRequestPageEnabled('car'))) return res.status(403).send('This request page is currently disabled by an administrator. Please try again later.');
   const request = { department: String(req.body.department || '').trim(), purpose: String(req.body.purpose || '').trim(), travel_date: req.body.travel_date, passenger_count: Number(req.body.passenger_count), pickup_location: String(req.body.pickup_location || '').trim(), destination: String(req.body.destination || '').trim(), pickup_time: req.body.pickup_time, return_time: req.body.return_time || null, requester_name: String(req.body.requester_name || '').trim(), requester_mobile: String(req.body.requester_mobile || '').trim(), requester_email: String(req.body.requester_email || '').trim().toLowerCase(), remarks: String(req.body.remarks || '').trim(), status: 'pending' };
   if (!request.department || !request.purpose || !request.travel_date || !Number.isInteger(request.passenger_count) || request.passenger_count < 1 || !request.pickup_location || !request.destination || !request.pickup_time || !request.requester_name || !request.requester_mobile || !request.requester_email) return res.status(400).send('All required car request fields must be filled.');
   if (supabase) {
@@ -2538,13 +2787,44 @@ const localSystemSettings = {
   INSTITUTE_NAME: 'Sardar Vallabhbhai Patel Institute of Technology, Vasad Campus',
   PURCHASE_LIMIT: '10000',
   CURRENCY: 'INR',
-  EMAIL_ENABLED: 'true'
+  EMAIL_ENABLED: 'true',
+  REQUEST_PAGE_ENABLED: 'true',
+  MAINTENANCE_PAGE_ENABLED: 'true',
+  CAR_PAGE_ENABLED: 'true',
+  PURCHASE_PAGE_ENABLED: 'true'
 };
 async function getSystemSetting(key) {
   if (!supabase) return localSystemSettings[key];
   const { data, error } = await supabase.from('system_settings').select('*').eq('setting_key', key).maybeSingle();
   if (error || !data) return localSystemSettings[key];
   return data.setting_value;
+}
+async function setSystemSetting(key, value) {
+  if (!supabase) { localSystemSettings[key] = value; return; }
+  const { error } = await supabase.from('system_settings').upsert({ setting_key: key, setting_value: value, updated_at: new Date().toISOString() }, { onConflict: 'setting_key' });
+  if (error) throw error;
+  localSystemSettings[key] = value;
+}
+
+async function isRequestPageEnabled(moduleKey) {
+  const key = { auditorium: 'REQUEST_PAGE_ENABLED', maintenance: 'MAINTENANCE_PAGE_ENABLED', car: 'CAR_PAGE_ENABLED', purchase: 'PURCHASE_PAGE_ENABLED' }[moduleKey] || 'REQUEST_PAGE_ENABLED';
+  return (await getSystemSetting(key)) !== 'false';
+}
+
+const requestPageTagline = (moduleKey) => {
+  const labels = {
+    auditorium: 'Auditorium permission requests',
+    maintenance: 'Maintenance & repair requests',
+    car: 'Car / vehicle requests',
+    purchase: 'Purchase requests'
+  };
+  return labels[moduleKey] || 'requests';
+};
+
+async function renderClosedRequestPage(req, res, moduleKey) {
+  const tagline = requestPageTagline(moduleKey);
+  const closedHtml = `<main class="shell"><div class="college-heading"><h1>SVIT VASAD</h1></div><div class="request-layout"><aside class="side-panel"><h2>Requests<br><em>closed</em></h2><p class="sub-title">The request page is temporarily unavailable.</p><div class="rule"></div><nav class="nav-buttons"><a href="/" class="nav-btn"><span class="btn-icon">🏠</span> Back to main page</a><a href="/login" class="nav-btn"><span class="btn-icon">🔐</span> Sign in</a></nav></aside><section class="main-content"><p class="eyebrow">Requests closed</p><h1>Requests are<br><em>currently closed</em></h1><p class="lede">${tagline} cannot be submitted right now.</p><div style="padding:24px;border:1px solid var(--orange);border-radius:4px;color:var(--ink);font:15px/1.6 Arial,sans-serif"><strong>This page is temporarily disabled.</strong><br>The administrator has closed this request page. Please try again later or contact the administrator for assistance.</div></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main>`;
+  res.status(200).send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Requests closed | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.college-heading{text-align:center;margin:20px 0 10px}.college-heading h1{font-size:clamp(36px,6vw,64px);font-weight:700;letter-spacing:.08em;margin:0}.request-layout{display:grid;grid-template-columns:280px 1fr;gap:0;min-height:80vh}.side-panel{background:var(--ink);color:var(--paper);padding:40px 30px}.side-panel h2{font-size:28px;font-weight:400;margin:0 0 10px;line-height:1.2}.side-panel h2 em{font-style:italic;color:var(--lime)}.side-panel .rule{width:40px;height:2px;background:var(--lime);margin:0 0 25px}.side-panel .nav-btn{display:block;padding:16px 20px;font:14px/1.4 Arial,sans-serif;color:var(--paper);text-decoration:none;border:1px solid rgba(255,255,255,0.2);border-radius:4px;margin-bottom:12px}.side-panel .nav-btn:hover{border-color:var(--lime);color:var(--lime)}.main-content{padding:50px 60px}.main-content .eyebrow{color:var(--orange);margin-bottom:15px;font:11px/1 Arial,sans-serif;text-transform:uppercase;letter-spacing:0.14em}.main-content h1{font-size:clamp(32px,5vw,52px);font-weight:400;margin:0 0 12px;line-height:1}.main-content h1 em{font-style:italic}.main-content .lede{font:15px/1.5 Arial,sans-serif;color:var(--muted);margin:0 0 40px;max-width:500px}@media(max-width:860px){.request-layout{grid-template-columns:1fr}.side-panel{padding:30px 24px}.main-content{padding:30px 24px}}</style></head><body>${closedHtml}</body></html>`);
 }
 
 async function getPurchaseRequests() {
@@ -2661,6 +2941,7 @@ const stockCategories = {
 };
 
 app.get('/purchase/:type', async (req, res) => {
+  if (!(await isRequestPageEnabled('purchase'))) return renderClosedRequestPage(req, res, 'purchase');
   const config = purchasePageConfig[req.params.type];
   if (!config) return res.status(404).send('Purchase page not found.');
   const departments = await getDepartments();
@@ -2683,6 +2964,7 @@ app.get('/purchase/:type', async (req, res) => {
 });
 
 app.post('/purchase', async (req, res) => {
+  if (!(await isRequestPageEnabled('purchase'))) return res.status(403).send('This request page is currently disabled by an administrator. Please try again later.');
   const purchaseType = req.body.purchase_type;
   if (!['local', 'stationary', 'cleaning', 'electric'].includes(purchaseType)) {
     return res.status(400).send('Invalid purchase type.');
@@ -3490,6 +3772,181 @@ app.post('/admin/reports/export', requireLogin, async (req, res) => {
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   const parts = [...selected].filter((k) => allowed.has(k)).sort().join('-') || 'empty';
   res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment(`campus-report-${parts}.xlsx`).send(buffer);
+});
+
+// --- Fees Management Routes ---
+async function getStudentsList() {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('students').select('*').order('enrollment_no');
+  return error ? [] : (data || []);
+}
+
+async function getBankPayments() {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('bank_payments').select('*').order('payment_date', { ascending: false });
+  return error ? [] : (data || []);
+}
+
+async function getFeesReconciliation() {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('fees_reconciliation').select('*').order('updated_at', { ascending: false });
+  return error ? [] : (data || []);
+}
+
+async function reconcileFees() {
+  if (!supabase) return;
+  try {
+    // Get all students and payments
+    const students = await getStudentsList();
+    const payments = await getBankPayments();
+    
+    // Group payments by enrollment number
+    const paymentsByEnrollment = {};
+    payments.forEach((p) => {
+      if (p.enrollment_no) {
+        if (!paymentsByEnrollment[p.enrollment_no]) {
+          paymentsByEnrollment[p.enrollment_no] = [];
+        }
+        paymentsByEnrollment[p.enrollment_no].push(p);
+      }
+    });
+    
+    // Reconcile each student
+    for (const student of students) {
+      const studentPayments = paymentsByEnrollment[student.enrollment_no] || [];
+      const paidAmount = studentPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+      const totalFees = Number(student.total_fees || 0);
+      const outstanding = totalFees - paidAmount;
+      const status = outstanding <= 0 ? 'paid' : (paidAmount > 0 ? 'partial' : 'unpaid');
+      const lastPayment = studentPayments.length > 0 ? studentPayments[0].payment_date : null;
+      
+      // Upsert reconciliation record
+      await supabase.from('fees_reconciliation').upsert({
+        enrollment_no: student.enrollment_no,
+        student_name: student.name,
+        department: student.department,
+        total_fees: totalFees,
+        paid_amount: paidAmount,
+        outstanding_amount: outstanding < 0 ? 0 : outstanding,
+        payment_status: status,
+        last_payment_date: lastPayment,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'enrollment_no' });
+    }
+  } catch (error) {
+    console.error('Reconciliation error:', error.message);
+  }
+}
+
+app.get('/admin/fees', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const students = await getStudentsList();
+  const payments = await getBankPayments();
+  
+  const studentRows = students.length ? students.map((s) => `<tr><td>${escapeHtml(s.enrollment_no)}</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.department)}</td><td>₹${Number(s.total_fees || 0).toFixed(2)}</td><td>${escapeHtml(s.email || '-')}</td></tr>`).join('') : '<tr><td colspan="5">No students uploaded yet.</td></tr>';
+  
+  const paymentRows = payments.slice(0, 20).map((p) => `<tr><td>${escapeHtml(p.enrollment_no || '-')}</td><td>${escapeHtml(p.student_name || '-')}</td><td>₹${Number(p.amount || 0).toFixed(2)}</td><td>${escapeHtml(p.payment_date)}</td><td>${escapeHtml(p.bank_name || '-')}</td></tr>`).join('');
+  
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Student Fees Management</title><link rel="stylesheet" href="/styles.css"><style>.fees-section{margin:30px 0;padding:20px;border:1px solid var(--line);border-radius:8px}.upload-form{display:flex;flex-direction:column;gap:15px;max-width:500px}.upload-form input[type="file"]{padding:10px;border:1px solid var(--line);border-radius:4px}.upload-form button{padding:12px 20px;background:var(--ink);color:var(--paper);border:none;border-radius:4px;cursor:pointer;font-weight:600}.upload-form button:hover{background:#333}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin:20px 0}.stat-card{padding:20px;border:1px solid var(--line);border-radius:8px;text-align:center}.stat-card strong{display:block;font-size:24px;margin-bottom:5px}.table-wrap{overflow-x:auto;margin:20px 0}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Student<br><em>Fees</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/fees', req.session.user)}<section class="panel-intro"><p class="eyebrow">Fees Management</p><h2>Upload student list and bank payments.</h2><p class="lede">Import student lists and bank transaction records, then reconcile to identify outstanding fees.</p></section><div class="stats"><div class="stat-card"><strong>${students.length}</strong><span>Students</span></div><div class="stat-card"><strong>${payments.length}</strong><span>Payments</span></div></div><section class="fees-section"><h3>📋 Upload Student List</h3><p>Upload an Excel file with columns: Enrollment No, Name, Department, Total Fees, Email, Mobile</p><form class="upload-form" action="/admin/fees/import-students" method="post" enctype="multipart/form-data"><input type="file" name="students_file" accept=".xlsx,.xls,.csv" required><button type="submit">Upload Student List</button></form></section><section class="fees-section"><h3>🏦 Upload Bank Payments</h3><p>Upload an Excel file with columns: Transaction ID, Enrollment No, Student Name, Amount, Payment Date, Bank Name</p><form class="upload-form" action="/admin/fees/import-payments" method="post" enctype="multipart/form-data"><input type="file" name="payments_file" accept=".xlsx,.xls,.csv" required><button type="submit">Upload Bank Payments</button></form></section><section class="fees-section"><h3>🔄 Actions</h3><form action="/admin/fees/reconcile-now" method="post" style="display:inline"><button class="small-button" type="submit" onclick="return confirm('Reconcile all students with payments? This will update the fees status.')">Reconcile Now</button></form> <a class="page-nav" href="/admin/fees/report">View Outstanding Fees Report →</a></section><section class="fees-section"><h3>📊 Recent Students</h3><div class="table-wrap"><table><thead><tr><th>Enrollment</th><th>Name</th><th>Department</th><th>Total Fees</th><th>Contact</th></tr></thead><tbody>${studentRows}</tbody></table></div></section><section class="fees-section"><h3>💳 Recent Payments</h3><div class="table-wrap"><table><thead><tr><th>Enrollment</th><th>Student Name</th><th>Amount</th><th>Date</th><th>Bank</th></tr></thead><tbody>${paymentRows}</tbody></table></div></section></main></body></html>`);
+});
+
+app.post('/admin/fees/import-students', requireLogin, upload.single('students_file'), async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!req.file) return res.status(400).send('No file uploaded.');
+  
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(sheet);
+    
+    if (!supabase) return res.status(400).send('Database not configured.');
+    
+    for (const row of data) {
+      const enrollmentNo = String(row['Enrollment No'] || row['enrollment_no'] || row['ENROLLMENT_NO'] || '').trim();
+      const name = String(row['Name'] || row['name'] || row['NAME'] || '').trim();
+      const department = String(row['Department'] || row['department'] || row['DEPARTMENT'] || '').trim();
+      const totalFees = Number(row['Total Fees'] || row['total_fees'] || row['TOTAL_FEES'] || 0);
+      const email = String(row['Email'] || row['email'] || row['EMAIL'] || '').trim();
+      const mobile = String(row['Mobile'] || row['mobile'] || row['MOBILE'] || '').trim();
+      
+      if (enrollmentNo && name) {
+        await supabase.from('students').upsert({
+          enrollment_no: enrollmentNo,
+          name,
+          department: department || 'Unknown',
+          total_fees: totalFees,
+          email: email || null,
+          mobile: mobile || null
+        }, { onConflict: 'enrollment_no' });
+      }
+    }
+    
+    res.redirect('/admin/fees?uploaded=students');
+  } catch (error) {
+    res.status(500).send(`Error uploading students: ${error.message}`);
+  }
+});
+
+app.post('/admin/fees/import-payments', requireLogin, upload.single('payments_file'), async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!req.file) return res.status(400).send('No file uploaded.');
+  
+  try {
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(sheet);
+    
+    if (!supabase) return res.status(400).send('Database not configured.');
+    
+    for (const row of data) {
+      const transactionId = String(row['Transaction ID'] || row['transaction_id'] || row['TRANSACTION_ID'] || '').trim();
+      const enrollmentNo = String(row['Enrollment No'] || row['enrollment_no'] || row['ENROLLMENT_NO'] || '').trim();
+      const studentName = String(row['Student Name'] || row['student_name'] || row['STUDENT_NAME'] || '').trim();
+      const amount = Number(row['Amount'] || row['amount'] || row['AMOUNT'] || 0);
+      const paymentDate = String(row['Payment Date'] || row['payment_date'] || row['PAYMENT_DATE'] || '').trim();
+      const bankName = String(row['Bank Name'] || row['bank_name'] || row['BANK_NAME'] || '').trim();
+      
+      if (amount > 0 && paymentDate) {
+        await supabase.from('bank_payments').insert({
+          transaction_id: transactionId || `TXN-${Date.now()}-${Math.random()}`,
+          enrollment_no: enrollmentNo || null,
+          student_name: studentName || null,
+          amount,
+          payment_date: paymentDate,
+          bank_name: bankName || null
+        }).then(({ error }) => { if (error && error.code !== 'PGRST204') console.error(error); });
+      }
+    }
+    
+    res.redirect('/admin/fees?uploaded=payments');
+  } catch (error) {
+    res.status(500).send(`Error uploading payments: ${error.message}`);
+  }
+});
+
+app.post('/admin/fees/reconcile-now', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await reconcileFees();
+  res.redirect('/admin/fees/report');
+});
+
+app.get('/admin/fees/report', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const reconciliation = await getFeesReconciliation();
+  
+  const pendingFees = reconciliation.filter((r) => r.payment_status !== 'paid');
+  const paidStudents = reconciliation.filter((r) => r.payment_status === 'paid');
+  const partialPayments = reconciliation.filter((r) => r.payment_status === 'partial');
+  
+  const totalFeesDue = pendingFees.reduce((sum, r) => sum + (Number(r.outstanding_amount) || 0), 0);
+  
+  const reportRows = reconciliation.map((r) => {
+    const statusColor = r.payment_status === 'paid' ? '#2a7f52' : (r.payment_status === 'partial' ? '#e97742' : '#d32f2f');
+    const statusLabel = r.payment_status === 'paid' ? 'Paid' : (r.payment_status === 'partial' ? 'Partial' : 'Unpaid');
+    return `<tr><td>${escapeHtml(r.enrollment_no)}</td><td>${escapeHtml(r.student_name)}</td><td>${escapeHtml(r.department || '-')}</td><td>₹${Number(r.total_fees || 0).toFixed(2)}</td><td>₹${Number(r.paid_amount || 0).toFixed(2)}</td><td style="color:${statusColor};font-weight:600">₹${Number(r.outstanding_amount || 0).toFixed(2)}</td><td><span style="background:${statusColor};color:#fff;padding:4px 8px;border-radius:4px;font-size:12px">${statusLabel}</span></td><td>${r.last_payment_date ? escapeHtml(r.last_payment_date) : '-'}</td></tr>`;
+  }).join('');
+  
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fees Report</title><link rel="stylesheet" href="/styles.css"><style>.report-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin:20px 0}.stat-box{padding:20px;border:1px solid var(--line);border-radius:8px;background:#f9f9f9}.stat-box strong{display:block;font-size:28px;margin-bottom:5px;color:var(--orange)}.table-wrap{overflow-x:auto;margin:20px 0}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Outstanding<br><em>Fees Report</em></h1></div><a class="page-nav" href="/admin/fees">Back to Fees Management</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/fees/report', req.session.user)}<section class="panel-intro"><p class="eyebrow">Fees Status</p><h2>Student fees reconciliation report.</h2><p class="lede">Overview of all students, their total fees, payments received, and outstanding balances.</p></section><div class="report-stats"><div class="stat-box"><strong>${reconciliation.length}</strong><span>Total Students</span></div><div class="stat-box"><strong>${paidStudents.length}</strong><span>Fully Paid</span></div><div class="stat-box"><strong>${partialPayments.length}</strong><span>Partial Payments</span></div><div class="stat-box"><strong>${pendingFees.length}</strong><span>Unpaid/Pending</span></div><div class="stat-box"><strong>₹${totalFeesDue.toFixed(2)}</strong><span>Total Outstanding</span></div></div><section class="table-wrap"><table><thead><tr><th>Enrollment</th><th>Student Name</th><th>Department</th><th>Total Fees</th><th>Paid Amount</th><th>Outstanding</th><th>Status</th><th>Last Payment</th></tr></thead><tbody>${reportRows}</tbody></table></section></main></body></html>`);
 });
 
 app.listen(port, () => {
