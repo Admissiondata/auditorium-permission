@@ -76,10 +76,10 @@ alter table public.auditoriums add constraint auditoriums_capacity_check check (
 alter table public.auditoriums add column if not exists approval_2_role text not null default 'electrician';
 alter table public.auditoriums add column if not exists approval_3_role text not null default 'principal';
 alter table public.auditoriums add column if not exists approval_4_role text not null default 'maintenance';
-alter table public.auditoriums add column if not exists is_locked boolean not null default false;
 alter table public.auditoriums add column if not exists principal_user_id text;
 alter table public.auditoriums add column if not exists maintenance_user_id text;
-alter table public.auditoriums add column if not exists min_students integer not null default 1 check (min_students > 0);
+alter table public.auditoriums add column if not exists is_locked boolean not null default false;
+alter table public.auditoriums add column if not exists min_students integer not null default 1;
 
 alter table public.requests add column if not exists requester_id text not null default 'public';
 alter table public.requests add column if not exists rejection_remarks text;

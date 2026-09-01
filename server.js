@@ -283,18 +283,21 @@ async function notifyRequester(request, status, remarks) {
 
 async function renderRequestPage(req, res) {
   try {
+    const viewerIsAdmin = Boolean(req.session && req.session.user && isAdmin(req.session.user));
     const requestPageEnabled = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
-    if (!requestPageEnabled) {
-      const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    if (!requestPageEnabled && !viewerIsAdmin) {
       const disabledHtml = '<section class="main-content"><p class="eyebrow">Requests closed</p><h1>Auditorium<br><em>permission</em></h1><p class="lede">The auditorium request page has been temporarily disabled by an administrator.</p><div style="padding:24px;border:1px solid var(--orange);border-radius:4px;color:var(--ink);font:15px/1.6 Arial,sans-serif"><strong>Requests are currently closed.</strong><br>New auditorium requests cannot be submitted right now. Please try again later or contact the administrator for assistance.</div></section>';
       res.send(page.replace(/<section class="main-content">[\s\S]*?<\/section>\s*<\/div>\s*<footer>/, () => `${disabledHtml}</div>\n    <footer>`));
       return;
     }
     const auditoriumConfigs = await getAuditoriumConfigs();
     const departments = await getDepartments();
-    const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
-    const options = auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).length
-      ? auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).map((auditorium) => `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" data-min-students="${auditorium.min_students || 1}" required><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Min: ${auditorium.min_students || 1} students)</span></span></label>`).join('')
+    const visibleConfigs = viewerIsAdmin ? auditoriumConfigs : auditoriumConfigs.filter((auditorium) => !auditorium.is_locked);
+    const options = visibleConfigs.length
+      ? visibleConfigs.map((auditorium) => auditorium.is_locked
+          ? `<label class="choice" title="Disabled by admin"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" disabled><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Disabled by admin)</span></span></label>`
+          : `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" data-min-students="${auditorium.min_students || 1}" required><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Min: ${auditorium.min_students || 1} students)</span></span></label>`).join('')
       : '<p class="empty-rooms">No auditoriums are currently available. An administrator must unlock a room before it can be selected.</p>';
     const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
@@ -305,6 +308,10 @@ async function renderRequestPage(req, res) {
       .replace(/<fieldset><legend>Choose auditorium<\/legend>[\s\S]*?<\/fieldset>/, `<fieldset><legend>Choose auditorium</legend>${options}</fieldset>`)
       .replace(/<strong>\d+<\/strong>\s*<span>Auditoriums available<\/span>/, `<strong>${availableCount < 10 ? '0' + availableCount : availableCount}</strong>\n          <span>Auditoriums available</span>`);
     result = result.replace(/<select name="department" required><option value="">Select department<\/option><\/select>/g, `<select name="department" required>${purchaseDepartmentOptions}</select>`);
+    if (!requestPageEnabled && viewerIsAdmin) {
+      const banner = '<div style="border:1px solid var(--orange);background:transparent;color:var(--ink);padding:14px 18px;border-radius:4px;font:14px/1.5 Arial,sans-serif;margin:0 0 22px"><strong>Admin preview:</strong> the auditorium request page is currently <strong>disabled for users</strong>. Disabled auditoriums are shown below for review and cannot be selected.</div>';
+      result = result.replace('<p class="lede">Submit one clear request for every programme, lecture, rehearsal, or campus gathering.</p>', `${banner}<p class="lede">Submit one clear request for every programme, lecture, rehearsal, or campus gathering.</p>`);
+    }
     res.send(result);
   } catch (error) {
     res.status(500).send(error.message);
@@ -830,28 +837,73 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
   const capacity = Number(req.body.capacity || 300);
   if (!name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
+  const roles = collectApprovalRoles(req.body);
+  const values = { name, capacity, min_students: 1, principal_user_id: '', maintenance_user_id: '' };
+  applyLegacyRoles(values, roles);
   if (supabase) {
-    const { error } = await supabase.from('auditoriums').insert({ name, capacity });
+    const { error } = await supabase.from('auditoriums').insert(values);
     if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Database setup required. Run supabase/schema.sql in the Supabase SQL Editor.' : error.message);
   } else if (!localAuditoriums.some((auditorium) => auditorium.name === name)) {
-    localAuditoriums.push({ id: Date.now(), name, capacity, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' });
+    const item = { id: Date.now(), ...values };
+    applyLegacyRoles(item, roles);
+    localAuditoriums.push(item);
   }
-  res.redirect('/admin');
+  res.redirect('/admin/auditoriums/manage');
 });
 
 app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const auditoriums = await getAuditoriumConfigs();
-  const allUsers = await getUsers();
-  const principals = allUsers.filter((u) => u.role === 'principal');
-  const maintenanceUsers = allUsers.filter((u) => u.role === 'maintenance');
-  const roleOptions = (selected) => ['none', 'head', 'electrician', 'principal', 'maintenance', 'chairman', 'admin_officer', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${role === 'none' ? '— None' : escapeHtml(roleNames[role] || role)}</option>`).join('');
-  const userOptions = (users, selected, label) => {
-    const noneOption = `<option value="">-- None (${label}) --</option>`;
-    return noneOption + users.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selected ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`).join('');
-  };
-  const rows = auditoriums.map((auditorium) => auditorium.is_locked ? `<form class="auditorium-row locked" action="/admin/auditoriums/${auditorium.id}/lock" method="post"><strong>${auditoriumLabel(auditorium)}</strong><span style="color:var(--orange)">Locked: disabled from request form</span><button type="submit" onclick="return confirm('Enable and unlock this auditorium?')">Unlock (Enable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>` : `<form class="auditorium-row" action="/admin/auditoriums/${auditorium.id}" method="post"><input name="name" value="${escapeHtml(auditorium.name)}" required><input name="capacity" type="number" min="1" value="${escapeHtml(auditorium.capacity || 300)}" aria-label="Capacity" required><input name="min_students" type="number" min="1" value="${escapeHtml(auditorium.min_students || 1)}" aria-label="Minimum Students" placeholder="Min students" required><select name="approval_1_role">${roleOptions(auditorium.approval_1_role)}</select><select name="approval_2_role">${roleOptions(auditorium.approval_2_role)}</select><select name="approval_3_role">${roleOptions(auditorium.approval_3_role)}</select><select name="approval_4_role">${roleOptions(auditorium.approval_4_role || 'maintenance')}</select><label class="assign-label">Principal<select name="principal_user_id">${userOptions(principals, auditorium.principal_user_id || '', 'Principal')}</select></label><label class="assign-label">Maintenance Officer<select name="maintenance_user_id">${userOptions(maintenanceUsers, auditorium.maintenance_user_id || '', 'Maintenance')}</select></label><span>Unlocked: visible on request form</span><button type="submit" onclick="return confirm('Save changes to this auditorium?')">Save changes</button><button formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit" onclick="return confirm('Disable and lock this auditorium from the public request form?')">Lock (Disable)</button><button formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><h1>Manage <em>rooms</em></h1><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names, configure approval roles, assign Principal and Maintenance Officer per auditorium, lock (disable) or delete a room permanently.</p></section><section class="auditorium-list">${rows}</section></main></body></html>`);
+  let stageCount = 4;
+  auditoriums.forEach((a) => { const c = approvalRoles(a).length; if (c > stageCount) stageCount = c; });
+  const stageSelect = (selected, nameAttr) => `<select name="${nameAttr}">${['none', 'head', 'electrician', 'principal', 'maintenance', 'chairman', 'admin_officer', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin'].map((role) => `<option value="${role}"${role === (selected || 'none') ? ' selected' : ''}>${role === 'none' ? '— None' : escapeHtml(roleNames[role] || role)}</option>`).join('')}</select>`;
+  const stageHeaders = (() => {
+    let html = '';
+    for (let n = 1; n <= stageCount; n++) {
+      html += `<th class="stage-head"><span class="stage-label">${ordinal(n)}&nbsp;Approval</span>${n === stageCount ? '<button class="col-del" type="button" onclick="removeStageColumn(this)" title="Delete this column">×</button>' : ''}</th>`;
+    }
+    return html;
+  })();
+  const actionButtons = (auditorium) => `<button class="small-button" type="submit" onclick="return confirm('Save changes to ${auditorium.name}?')">Save</button><button class="small-button" formaction="/admin/auditoriums/${auditorium.id}/lock" type="submit" onclick="return confirm('${auditorium.is_locked ? 'Enable' : 'Disable'} ${auditorium.name}?')">${auditorium.is_locked ? 'Unlock' : 'Disable'}</button><button class="small-button reject-button" formaction="/admin/auditoriums/${auditorium.id}/delete" type="submit" onclick="return confirm('Delete ${auditorium.name} permanently?')">Delete</button>`;
+  const rowForms = auditoriums.map((auditorium, ri) => {
+    const stages = approvalRoles(auditorium);
+    let cells = '';
+    for (let i = 0; i < stageCount; i++) cells += `<td class="stage-cell">${stageSelect(stages[i], `approval_${i + 1}_${ri}`)}</td>`;
+    return `<tr><input type="hidden" name="id[]" value="${escapeHtml(auditorium.id)}"><td>${escapeHtml(auditorium.id)}</td><td>${auditorium.is_locked ? `<strong>${auditoriumLabel(auditorium)}</strong>` : `<input name="name[]" value="${escapeHtml(auditorium.name)}" required>`}${cells}<td class="actions-cell">${actionButtons(auditorium)}</td></tr>`;
+  }).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Manage<br><em>rooms</em></h1></div><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names and approval routes per room. Add more approval columns for longer routes with "+ Add approval column", remove one with its × button, lock (disable) or delete a room.</p></section><div class="admin-tools"><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button></div><section class="table-wrap"><h3>Existing rooms</h3><form id="row-form" action="/admin/auditoriums/manage" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><table><thead><tr><th>Id</th><th>Name</th>${stageHeaders}<th style="width:220px">Actions</th></tr></thead><tbody>${rowForms}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save all changes</button></div></form></section><section class="table-wrap"><h3>Add a new room</h3><form action="/admin/auditoriums" method="post"><table><thead><tr><th>Name</th>${stageHeaders}</tr></thead><tbody><tr>${`<td><input name="name" placeholder="New room name" required></td>${Array.from({ length: stageCount }, (_, i) => `<td class="stage-cell">${stageSelect(i === 0 ? 'head' : i === 1 ? 'electrician' : i === 2 ? 'principal' : 'maintenance', `approval_${i + 1}`)}</td>`).join('')}`}</tr></tbody></table><div class="admin-tools"><button class="small-button" type="submit">Add room</button></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}var roleVals=['none','head','electrician','principal','maintenance','chairman','admin_officer','higher_authority','purchase_officer','work_done','department_user','sub_admin','admin'];function makeSelect(){var h='<select>'+roleVals.map(function(r){return '<option value="'+r+'">'+(r==='none'?'— None':r)+'</option>';}).join('')+'</select>';return h;}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function stageName(col,row){return 'approval_'+(col+1)+'_'+row;}function nameSelectsInRow(tr){Array.prototype.slice.call(tr.querySelectorAll('td.stage-cell select')).forEach(function(sel,ci){sel.name=stageName(ci,rowIndexOf(tr));});}function addStageColumn(){var tbody=document.querySelector('#row-form tbody');var theadTr=document.querySelector('#row-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);Array.prototype.slice.call(tbody.rows).forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=makeSelect;tr.insertBefore(td,tr.cells[tr.cells.length-2]);nameSelectsInRow(tr);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);Array.prototype.slice.call(document.querySelectorAll('#row-form tbody tr')).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;document.getElementById('stage_count').value=currentStages;}</script></body></html>`);
+});
+
+app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const ids = Array.isArray(req.body.id) ? req.body.id : [req.body.id];
+  const names = Array.isArray(req.body.name) ? req.body.name : [req.body.name];
+  const stageCount = Number(req.body.stage_count || 4);
+  try {
+    for (let ri = 0; ri < ids.length; ri++) {
+      const id = ids[ri];
+      const current = (await getAuditoriumConfigs()).find((auditorium) => String(auditorium.id) === String(id));
+      if (!current || current.is_locked) continue;
+      const roles = [];
+      for (let n = 1; n <= stageCount; n++) {
+        const val = req.body[`approval_${n}_${ri}`];
+        roles.push(val === undefined ? 'none' : String(val).trim() || 'none');
+      }
+      while (roles.length && roles[roles.length - 1] === 'none') roles.pop();
+      if (!roles.length) roles.push('head');
+      const values = { name: String(names[ri] || current.name).trim(), min_students: current.min_students || 1, capacity: current.capacity || 300, principal_user_id: current.principal_user_id || '', maintenance_user_id: current.maintenance_user_id || '' };
+      applyLegacyRoles(values, roles);
+      if (supabase) {
+        const { error } = await supabase.from('auditoriums').update(values).eq('id', String(id));
+        if (error) throw new Error(error.message);
+      } else {
+        Object.assign(localAuditoriums.find((auditorium) => String(auditorium.id) === String(id)) || {}, values);
+      }
+    }
+  } catch (e) {
+    return res.status(500).send(e.message);
+  }
+  res.redirect('/admin/auditoriums/manage');
 });
 
 app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
@@ -1179,8 +1231,39 @@ function approvalAction(request, user, auditoriumConfigs) {
   return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
 }
 
+function approvalRoles(auditorium) {
+  const firstThree = [auditorium.approval_1_role, auditorium.approval_2_role, auditorium.approval_3_role].map((r) => r || 'none');
+  const fourth = auditorium.approval_4_role;
+  if (typeof fourth === 'string' && fourth.includes('|')) {
+    return firstThree.concat(fourth.split('|').map((r) => r.trim()).filter(Boolean));
+  }
+  return firstThree.concat(fourth || 'none');
+}
+
+function collectApprovalRoles(body) {
+  const roles = [];
+  let n = 1;
+  while (true) {
+    const val = body[`approval_${n}`];
+    if (val === undefined) break;
+    roles.push(String(val).trim() || 'none');
+    n += 1;
+  }
+  if (!roles.length) roles.push('head', 'electrician', 'principal', 'maintenance');
+  while (roles.length && roles[roles.length - 1] === 'none') roles.pop();
+  if (!roles.length) roles.push('head');
+  return roles;
+}
+
+function applyLegacyRoles(values, roles) {
+  values.approval_1_role = roles[0] || 'head';
+  values.approval_2_role = roles[1] || 'electrician';
+  values.approval_3_role = roles[2] || 'principal';
+  values.approval_4_role = roles.slice(3).join('|') || 'maintenance';
+}
+
 function approvalTransition(request, auditorium) {
-  const roles = [auditorium.approval_1_role || 'head', auditorium.approval_2_role || 'electrician', auditorium.approval_3_role || 'principal', auditorium.approval_4_role || 'maintenance'];
+  const roles = approvalRoles(auditorium);
   const stageByStatus = { pending: 0, first_approved: 1, second_approved: 2, third_approved: 3 };
   let stage = stageByStatus[request.status];
   if (stage === undefined) return null;
