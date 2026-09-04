@@ -76,10 +76,10 @@ const localDepartments = [
   { id: 1, name: 'Computer Engineering', head_user_id: 'hod.computer@svitvasad.ac.in', email: '', designation: '' }
 ];
 const localAuditoriums = [
-  { id: 1, name: 'Architecture Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 3, name: 'Main Auditorium', capacity: 500, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' },
-  { id: 4, name: 'Seminar Auditorium', capacity: 250, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', principal_user_id: '', maintenance_user_id: '' }
+  { id: 1, name: 'Architecture Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
+  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
+  { id: 3, name: 'Main Auditorium', capacity: 500, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
+  { id: 4, name: 'Seminar Auditorium', capacity: 250, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' }
 ];
 const users = [
   { id: 'admin@svitvasad.ac.in', password: 'admin123', name: 'System administrator', role: 'admin', department: 'All departments' },
@@ -108,7 +108,7 @@ async function getUsers() {
 
 async function saveUser(user, passwordProvided) {
   if (!supabase) return;
-  const values = { id: user.id, name: user.name, department: user.department, role: user.role, password: user.password };
+  const values = { id: user.id, name: user.name, department: user.department, role: user.role, password: user.password, phone: user.phone || null };
   if (!passwordProvided && !values.password) throw new Error('Existing user password is unavailable.');
   const { error } = await supabase.from('user_accounts').upsert(values, { onConflict: 'id' });
   if (error) throw error;
@@ -173,6 +173,40 @@ const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMT
   : null;
 let senderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'nodalofficer@svitvasad.ac.in';
 
+// --- WhatsApp notifications ---
+// Uses the Meta WhatsApp Cloud API when WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID are set.
+// Falls back to a wa.me deep link (logged) so messages can still be shared manually.
+function sendWhatsApp(phone, message) {
+  if (!phone) return Promise.resolve();
+  const waPhone = String(phone).replace(/[^\d]/g, '').replace(/^0+/, '');
+  const fullPhone = waPhone.length === 10 ? '91' + waPhone : waPhone;
+  const token = process.env.WHATSAPP_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  if (token && phoneNumberId) {
+    return fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to: fullPhone, type: 'text', text: { body: message } })
+    }).then(async (res) => {
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`WhatsApp API ${res.status}: ${errText}`);
+      }
+      return res.json();
+    }).catch((error) => {
+      console.error(`WhatsApp message could not be sent to ${fullPhone}: ${error.message}`);
+    });
+  }
+  const link = `https://wa.me/${fullPhone}?text=${encodeURIComponent(message)}`;
+  console.log(`WhatsApp (no API configured) -> ${fullPhone}: ${link}`);
+  return Promise.resolve(link);
+}
+function whatsappMessageForApprover(request, transitionLabel) {
+  return `SVIT Vasad – Auditorium Approval ${transitionLabel}\n\n` +
+    `Programme: ${request.program}\nDepartment: ${request.department}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || ''} - ${request.end_time || ''}\n\n` +
+    `Requester: ${request.requester_name || request.faculty_name || ''}\nMobile: ${request.requester_mobile || ''}\n\nPlease sign in to the approval desk to respond.`;
+}
+
 app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100000 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(session({
@@ -212,6 +246,9 @@ async function getDepartments() {
 
 async function approverEmail(role, request, auditorium) {
   if (role === 'head') {
+    if (auditorium?.head_user_id) {
+      return auditorium.head_user_id;
+    }
     const department = (await getDepartments()).find((candidate) => candidate.name === request.department);
     return department?.head_user_id;
   }
@@ -222,6 +259,17 @@ async function approverEmail(role, request, auditorium) {
     return auditorium.maintenance_user_id;
   }
   return (await getUsers()).find((user) => user.role === role)?.id;
+}
+
+async function findUserByEmail(email) {
+  if (!email) return null;
+  const allUsers = await getUsers();
+  return allUsers.find((u) => String(u.id).toLowerCase() === String(email).toLowerCase()) || null;
+}
+async function approverPhone(role, request, auditorium) {
+  const email = await approverEmail(role, request, auditorium);
+  const user = await findUserByEmail(email);
+  return (user && user.phone) || null;
 }
 
 async function notifyPendingApprover(request, auditoriumConfigs) {
@@ -238,6 +286,10 @@ async function notifyPendingApprover(request, auditoriumConfigs) {
       referenceId: request.id,
       link: '/admin'
     });
+  }
+  const phone = await approverPhone(transition.role, request, auditorium);
+  if (phone) {
+    await sendWhatsApp(phone, whatsappMessageForApprover({ ...request, status: transition.status }, moduleRoleLabel(transition.role)));
   }
   if (!mailer) return;
   if (!recipient) return;
@@ -267,6 +319,10 @@ async function notifyRequester(request, status, remarks) {
       link: '/dashboard'
     });
   }
+  if (request.requester_mobile) {
+    const waMsg = `SVIT Vasad – Auditorium request ${statusLabel}\n\nProgramme: ${request.program}\nDepartment: ${request.department}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || ''} - ${request.end_time || ''}\nStatus: ${statusLabel}${remarks ? `\nRemarks: ${remarks}` : ''}\n\nPlease sign in to the approval desk for details.`;
+    await sendWhatsApp(request.requester_mobile, waMsg);
+  }
   if (!mailer) return;
   if (!recipientEmail) return;
   try {
@@ -281,14 +337,48 @@ async function notifyRequester(request, status, remarks) {
   }
 }
 
+async function notifyFinalReport(request, auditoriumConfigs) {
+  const auditorium = auditoriumConfigs.find((a) => a.name === request.auditorium) || {};
+  const reportRoles = ['admin_officer', 'electrician', 'maintenance'];
+  const allUsers = await getUsers();
+  const recipients = allUsers.filter((u) => reportRoles.includes(u.role));
+  const reportText = `All approvals completed for auditorium request.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStudent count: ${request.student_count || 'Not specified'}\nRequester: ${request.requester_name || request.faculty_name || 'Not specified'}\nContact: ${request.requester_mobile || 'Not specified'}\n\nThis request has been fully approved. Please take note.`;
+  for (const recipient of recipients) {
+    await createNotification({
+      userId: recipient.id,
+      title: `Auditorium approved (report): ${request.program}`,
+      message: `${request.department} · ${request.auditorium} · ${request.date}. All approvals completed. Final report for your records.`,
+      module: 'auditorium',
+      referenceId: request.id,
+      link: '/admin'
+    });
+    if (recipient.phone) {
+      await sendWhatsApp(recipient.phone, reportText.replace(/\n/g, '\n').replace(/\n\n/g, '\n'));
+    }
+    if (mailer) {
+      try {
+        await mailer.sendMail({
+          from: senderEmail,
+          to: recipient.id,
+          subject: `Auditorium approved (final report): ${request.program}`,
+          text: reportText
+        });
+      } catch (error) {
+        console.error(`Final report email to ${recipient.id} failed: ${error.message}`);
+      }
+    }
+  }
+}
+
 async function renderRequestPage(req, res) {
   try {
     const viewerIsAdmin = Boolean(req.session && req.session.user && isAdmin(req.session.user));
     const requestPageEnabled = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
     const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    const heading = await collegeHeading();
     if (!requestPageEnabled && !viewerIsAdmin) {
       const disabledHtml = '<section class="main-content"><p class="eyebrow">Requests closed</p><h1>Auditorium<br><em>permission</em></h1><p class="lede">The auditorium request page has been temporarily disabled by an administrator.</p><div style="padding:24px;border:1px solid var(--orange);border-radius:4px;color:var(--ink);font:15px/1.6 Arial,sans-serif"><strong>Requests are currently closed.</strong><br>New auditorium requests cannot be submitted right now. Please try again later or contact the administrator for assistance.</div></section>';
-      res.send(page.replace(/<section class="main-content">[\s\S]*?<\/section>\s*<\/div>\s*<footer>/, () => `${disabledHtml}</div>\n    <footer>`));
+      res.send(page.replace(/<div class="college-heading">[\s\S]*?<\/div>/, heading).replace(/<section class="main-content">[\s\S]*?<\/section>\s*<\/div>\s*<footer>/, () => `${disabledHtml}</div>\n    <footer>`));
       return;
     }
     const auditoriumConfigs = await getAuditoriumConfigs();
@@ -303,6 +393,7 @@ async function renderRequestPage(req, res) {
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
     const availableCount = auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).length;
     let result = page
+      .replace(/<div class="college-heading">[\s\S]*?<\/div>/, heading)
       .replace('<input name="department" placeholder="e.g. Computer Engineering" required>', `<select name="department" required><option value="">Select department</option>${departmentOptions}</select>`)
       .replace('<label>Branch / Department<input name="requester_branch" placeholder="e.g. Computer Engineering" required></label>', `<label>Branch / Department<select name="requester_branch" required><option value="">Select branch</option>${departmentOptions}</select></label>`)
       .replace(/<fieldset><legend>Choose auditorium<\/legend>[\s\S]*?<\/fieldset>/, `<fieldset><legend>Choose auditorium</legend>${options}</fieldset>`)
@@ -377,9 +468,44 @@ function decorateAdminPage(page) {
 
 const auditoriumLabel = (auditorium) => `${escapeHtml(auditorium.name)} (Capacity: ${escapeHtml(auditorium.capacity || 300)})`;
 
-app.get('/login', (req, res) => {
+async function collegeHeading() {
+  const logoUrl = await getLogoUrl();
+  if (logoUrl) return `<div class="college-heading"><img src="${escapeHtml(logoUrl)}" alt="SVIT Vasad" style="max-height:80px"></div>`;
+  return `<div class="college-heading"><h1>SVIT VASAD</h1></div>`;
+}
+
+app.get('/login', async (req, res) => {
   const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'login.html'), 'utf8');
+  const heading = await collegeHeading();
+  res.send(page.replace(/<div class="college-heading">[\s\S]*?<\/div>/, heading));
+});
+
+app.get('/forgot-password', async (req, res) => {
+  const heading = await collegeHeading();
+  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forget Password | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.login-layout{display:grid;grid-template-columns:1fr 1fr;gap:0;min-height:80vh}.login-left{background:var(--ink);color:var(--paper);padding:60px 50px;display:flex;flex-direction:column;justify-content:center}.login-left h1{font-size:clamp(36px,5vw,56px);font-weight:700;margin:0 0 20px;letter-spacing:.06em}.login-left .rule{width:50px;height:3px;background:var(--lime);margin:25px 0}.login-left p{font:15px/1.6 Arial,sans-serif;color:var(--muted);margin:0 0 15px}.login-right{padding:60px 50px;display:flex;flex-direction:column;justify-content:center}.login-right .eyebrow{color:var(--orange);margin-bottom:15px}.login-right h2{font-size:36px;font-weight:400;margin:0 0 35px;line-height:1.1}.login-right h2 em{font-style:italic}.login-form{max-width:400px}.login-form label{display:flex;flex-direction:column;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-family:Arial,sans-serif;margin-bottom:25px}.login-form input{font:17px Georgia,serif;color:var(--ink);background:transparent;border:0;border-bottom:1px solid var(--line);padding:10px 0 14px;outline:0;width:100%}.login-form input:focus{border-color:var(--ink)}.login-form button{width:100%;margin-top:10px;padding:14px;font-size:14px}.login-help{font:12px/1.5 Arial,sans-serif;color:var(--muted);margin-top:25px}.login-alert{background:rgba(233,119,66,.1);border:1px solid var(--orange);color:var(--ink);padding:14px;border-radius:4px;margin-bottom:20px;font:14px/1.5 Arial,sans-serif}@media(max-width:860px){.login-layout{grid-template-columns:1fr}.login-left{padding:40px 30px}.login-right{padding:40px 30px}}</style></head><body><main class="shell">${heading}<div class="login-layout"><section class="login-left"><h1>Reset<br>password.</h1><div class="rule"></div><p>Enter your registered email address and we will send you instructions to reset your password.</p><p style="margin-top:20px">Contact the administrator if you need immediate access.</p></section><section class="login-right"><p class="eyebrow">Forget password</p><h2>Enter your<br><em>email address.</em></h2><form class="login-form" action="/forgot-password" method="post"><label>Email ID<input name="user_id" type="email" autocomplete="username" placeholder="name@svitvasad.ac.in" required></label><button type="submit">Send reset instructions <span>↗</span></button><p class="login-help"><a href="/login" style="color:var(--orange);text-decoration:none">← Back to sign in</a></p></form></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main></body></html>`;
   res.send(page);
+});
+
+app.post('/forgot-password', async (req, res) => {
+  const email = String(req.body.user_id || '').trim().toLowerCase();
+  if (!email) return res.redirect('/forgot-password');
+  const allUsers = await getUsers();
+  const user = allUsers.find((candidate) => candidate.id === email);
+  const heading = await collegeHeading();
+  const successHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reset Instructions Sent | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.login-layout{display:grid;grid-template-columns:1fr 1fr;gap:0;min-height:80vh}.login-left{background:var(--ink);color:var(--paper);padding:60px 50px;display:flex;flex-direction:column;justify-content:center}.login-left h1{font-size:clamp(36px,5vw,56px);font-weight:700;margin:0 0 20px;letter-spacing:.06em}.login-left .rule{width:50px;height:3px;background:var(--lime);margin:25px 0}.login-left p{font:15px/1.6 Arial,sans-serif;color:var(--muted);margin:0 0 15px}.login-right{padding:60px 50px;display:flex;flex-direction:column;justify-content:center}.login-right .eyebrow{color:var(--orange);margin-bottom:15px}.login-right h2{font-size:36px;font-weight:400;margin:0 0 35px;line-height:1.1}.login-right h2 em{font-style:italic}.login-help{font:12px/1.5 Arial,sans-serif;color:var(--muted);margin-top:25px}.success-box{border:1px solid var(--positive,#2e7d32);background:rgba(46,125,50,.06);padding:24px;border-radius:6px;margin-bottom:25px}.success-box strong{display:block;margin-bottom:8px;font-size:16px}.success-box p{margin:0;font:14px/1.5 Arial,sans-serif;color:var(--muted)}@media(max-width:860px){.login-layout{grid-template-columns:1fr}.login-left{padding:40px 30px}.login-right{padding:40px 30px}}</style></head><body><main class="shell">${heading}<div class="login-layout"><section class="login-left"><h1>Check your<br>inbox.</h1><div class="rule"></div><p>If an account exists for that email, you will receive password reset instructions shortly.</p></section><section class="login-right"><p class="eyebrow">Instructions sent</p><h2>Password reset<br><em>instructions sent.</em></h2><div class="success-box"><strong>Email sent</strong><p>We have sent an email to <strong>${escapeHtml(email)}</strong> with instructions to reset your password. Please check your inbox and follow the link in the email.</p></div><p class="login-help" style="margin-top:30px"><strong>Didn't get the email?</strong><br>Check your spam or junk folder, or contact the administrator for help.</p><p class="login-help"><a href="/login" style="color:var(--orange);text-decoration:none">← Back to sign in</a></p></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main></body></html>`;
+  if (user && mailer) {
+    try {
+      await mailer.sendMail({
+        from: senderEmail,
+        to: user.id,
+        subject: 'Password reset request — SVIT Vasad',
+        text: `Hello ${escapeHtml(user.name)},\n\nA password reset was requested for your account.\n\nIf you did not request this, please ignore this email.\n\nTo reset your password, contact the administrator at ${senderEmail}.\n\n— SVIT Vasad Administration`
+      });
+    } catch (error) {
+      console.error(`Password reset email failed for ${user.id}: ${error.message}`);
+    }
+  }
+  res.send(successHtml);
 });
 
 const renderLogin = (res, error) => {
@@ -571,7 +697,7 @@ app.get('/admin/pages', requireLogin, async (req, res) => {
     ['1', 'Auditorium approval', [['Approval requests', '/admin', 'Review and process auditorium permission requests.'], ['Auditoriums and approval route', '/admin/auditoriums/manage', 'Configure rooms, capacity, approval stages, and assigned officers.']]],
     ['2', 'Maintenance approval', [['Maintenance requests', '/admin/maintenance', 'Review and approve maintenance and repair submissions.'], ['Submit maintenance request', '/maintenance', 'Create a new maintenance request.']]],
     ['3', 'Purchase', [['Stationery item', '/purchase/stationary', 'Submit stationery items and add extra line items.'], ['Local purchase', '/purchase/local', 'Submit a local purchase request.'], ['Cleaning item', '/purchase/cleaning', 'Submit cleaning item requests.'], ['Purchase approvals', '/admin/purchase', 'Review and approve purchase requests.'], ['Approval workflow builder', '/admin/workflows', 'Configure amount bands and approval role routes per module.'], ['Approval log', '/admin/approvals-log', 'Audit trail of every approval action.'], ['Department stock', '/admin/purchase/stock', 'Department-wise stock register.'], ['Stock transactions', '/admin/purchase/stock/transactions', 'Ledger of every stock purchase, issue, return and adjustment.'], ['Purchase approval roles', '/admin/purchase/settings', 'Assign approval roles and amount rules.'], ['Purchase Excel tools', '/admin/purchase/export', 'Download purchase data or an import template.']]],
-    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users and roles', '/admin/departments', 'Manage users and their role assignments.'], ['Module settings', '/admin/module-settings', 'Enable or disable request modules (auditorium, maintenance, car, purchase).']]],
+    ['6', 'Access control', [['Permissions matrix', '/admin/permissions', 'Configure which roles can access each module and how.'], ['Audit log', '/admin/audit-logs', 'Every administrative action, logged for accountability.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.'], ['Users and roles', '/admin/departments', 'Manage users and their role assignments.'], ['Common users', '/admin/users/common', 'Shared administrative users.'], ['Auditorium users', '/admin/users/auditorium', 'Manage auditorium module users.'], ['Maintenance users', '/admin/users/maintenance', 'Manage maintenance module users.'], ['Purchase users', '/admin/users/purchase', 'Manage purchase module users.'], ['Car users', '/admin/users/car', 'Manage car requisition module users.'], ['Inventory users', '/admin/users/inventory', 'Manage inventory module users.'], ['Module settings', '/admin/module-settings', 'Enable or disable request modules (auditorium, maintenance, car, purchase).'], ['Upload logo', '/admin/logo', 'Upload and manage the college logo displayed on all pages.']]],
     ['4', 'Car requests form', [['Car request form', '/car-requests', 'Request an official vehicle for approved travel.'], ['Car request approvals', '/admin/car-requests', 'Review and approve vehicle requests.'], ['Car & driver fleet register', '/admin/car-fleet', 'Register the available cars and drivers.'], ['Users and roles', '/admin/departments', 'Create users and assign administrator and approval duties.'], ['Role guide', '/admin/role-guide', 'Edit who should be given which login.']]],
     ['5', 'Inventory', [['Inventory register', '/admin/inventory', 'Record assets department-wise, floor-wise, and office-wise.'], ['Inventory template', '/admin/inventory/template', 'Download an Excel template for importing inventory.'], ['Inventory Excel', '/admin/inventory/export', 'Download all inventory data in one Excel sheet.']]],
     ['8', 'Student Fees', [['Fees management', '/admin/fees', 'Upload student lists and bank payments, reconcile outstanding fees.'], ['Outstanding fees report', '/admin/fees/report', 'View detailed fees status for all students.']]],
@@ -628,6 +754,7 @@ const portalMenus = {
   system: { icon: '⚙️', title: 'Admin Panel', tagline: 'Users, roles, permissions, workflows, reports, and the approval desk.', pages: [
     { label: 'Approvals desk', href: '/admin', desc: 'Auditorium requests in your lane, with stock and inventory tools.', level: 'manage' },
     { label: 'Users and roles', href: '/admin/departments', desc: 'Add, edit, and delete users; assign each role.', level: 'manage' },
+    { label: 'Upload logo', href: '/admin/logo', desc: 'Upload and manage the college logo displayed on all pages.', level: 'manage' },
     { label: 'Permissions matrix', href: '/admin/permissions', desc: 'Configure which roles can access each module and how.', level: 'manage' },
     { label: 'Role guide', href: '/admin/role-guide', desc: 'Edit who should be given which login.', level: 'manage' },
     { label: 'Module settings', href: '/admin/module-settings', desc: 'Enable or disable request modules.', level: 'manage' },
@@ -664,7 +791,11 @@ const roleNames = {
   head: 'Department head', maintenance: 'Maintenance officer', electrician: 'Electrician', principal: 'Principal', higher_authority: 'Higher authority', work_done: 'Work Inspector'
 };
 
-const roleOptionsForUser = (selected) => ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${escapeHtml(roleNames[role] || role)}</option>`).join('');
+const roleOptionsForUser = (selected) => {
+  const presets = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'];
+  const customOpt = selected && !presets.includes(String(selected)) ? `<option value="__custom__" selected>⚙️ ${escapeHtml(roleNames[selected] || selected)}</option>` : '';
+  return presets.map((role) => `<option value="${role}"${role === selected ? ' selected' : ''}>${escapeHtml(roleNames[role] || role)}</option>`).join('') + customOpt;
+};
 
 const userRowTemplate = (candidate, currentUser, departmentOptions, prefix = 'all') => {
   const formId = `user-form-${prefix}-${encodeURIComponent(candidate.id).replace(/%/g, '_')}_${candidate.department.replace(/[^a-z0-9]/gi, '_')}_${candidate.role || ''}`;
@@ -678,9 +809,11 @@ const userRowTemplate = (candidate, currentUser, departmentOptions, prefix = 'al
         : '<span class="status approved" style="font-size:11px;padding:3px 7px">Active</span>');
   const multiRoleNote = isAssignment ? '<span class="small-copy" style="display:block;font-size:11px;color:var(--orange)">Additional role for this email</span>' : '';
   if (isAssignment) {
-    return `<tr><td><strong>${escapeHtml(candidate.id)}</strong>${multiRoleNote}</td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td>${statusBadge}</td><td class="user-actions"><button form="${formId}" class="small-button" type="submit">Save</button> <button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/assignment/delete" formmethod="post" onclick="return confirm('Remove this extra role (${escapeHtml(candidate.role)}) for ${escapeHtml(candidate.id)}?')">Remove role</button></td></tr>`;
+    const customRole = !['admin','sub_admin','admin_officer','purchase_officer','purchase_clerk','chairman','department_user','head','maintenance','electrician','principal','work_done'].includes(candidate.role) ? candidate.role : '';
+    return `<tr><td><strong>${escapeHtml(candidate.id)}</strong>${multiRoleNote}</td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select><input form="${formId}" name="custom_role" value="${escapeHtml(customRole)}" placeholder="Custom role name" style="display:none" aria-label="Custom role"></td><td>${statusBadge}</td><td class="user-actions"><button form="${formId}" class="small-button" type="submit">Save</button> <button form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/assignment/delete" formmethod="post" onclick="return confirm('Remove this extra role (${escapeHtml(candidate.role)}) for ${escapeHtml(candidate.id)}?')">Remove role</button></td></tr>`;
   }
-  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select></td><td>${statusBadge}</td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/toggle" formmethod="post" onclick="return confirm('${isDisabled ? 'Enable this user account?' : 'Disable this user account? The user will not be able to log in.'}')">${isDisabled ? 'Enable' : 'Disable'}</button><button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post" onclick="return confirm('Are you sure you want to delete this user permanently?')">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
+  const customRole = !['admin','sub_admin','admin_officer','purchase_officer','purchase_clerk','chairman','department_user','head','maintenance','electrician','principal','work_done'].includes(candidate.role) ? candidate.role : '';
+  return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><input form="${formId}" name="phone" value="${escapeHtml(candidate.phone || '')}" placeholder="WhatsApp number" aria-label="WhatsApp number"><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select><input form="${formId}" name="custom_role" value="${escapeHtml(customRole)}" placeholder="Custom role name" style="display:none" aria-label="Custom role"></td><td>${statusBadge}</td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save</button> ${canDelete ? `<button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/toggle" formmethod="post" onclick="return confirm('${isDisabled ? 'Enable this user account?' : 'Disable this user account? The user will not be able to log in.'}')">${isDisabled ? 'Enable' : 'Disable'}</button><button class="small-button" form="${formId}" formaction="/admin/users/${encodeURIComponent(candidate.id)}/delete" formmethod="post" onclick="return confirm('Are you sure you want to delete this user permanently?')">Delete</button>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
 };
 
 const usersTable = (list, currentUser, departmentOptions, prefix = 'all') => list.length
@@ -713,9 +846,16 @@ function adminNavBar(activePath, user) {
     { label: '🏛️ Approvals Desk', path: '/admin' },
     { label: '🏛️ Manage Rooms', path: '/admin/auditoriums/manage', adminOnly: true },
     { label: '👥 Users & Roles', path: '/admin/departments', adminOnly: true },
+    { label: '👥 Common', path: '/admin/users/common', adminOnly: true },
+    { label: '👥 Auditorium', path: '/admin/users/auditorium', adminOnly: true },
+    { label: '👥 Maintenance', path: '/admin/users/maintenance', adminOnly: true },
+    { label: '👥 Purchase', path: '/admin/users/purchase', adminOnly: true },
+    { label: '👥 Car', path: '/admin/users/car', adminOnly: true },
+    { label: '👥 Inventory', path: '/admin/users/inventory', adminOnly: true },
+    { label: '🏫 Upload Logo', path: '/admin/logo', adminOnly: true },
     { label: '⚙️ Module Settings', path: '/admin/module-settings', adminOnly: true },
-    { label: '� Student Fees', path: '/admin/fees', adminOnly: true },
-    { label: '�🔧 Maintenance', path: '/admin/maintenance' },
+    { label: '💰 Student Fees', path: '/admin/fees', adminOnly: true },
+    { label: '🔧 Maintenance', path: '/admin/maintenance' },
     { label: '🛒 Purchase', path: '/admin/purchase' },
     { label: '🚗 Car Requests', path: '/admin/car-requests' },
     { label: '📦 Inventory', path: '/admin/inventory' },
@@ -838,7 +978,7 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
   if (!name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
   const roles = collectApprovalRoles(req.body);
-  const values = { name, capacity, min_students: 1, principal_user_id: '', maintenance_user_id: '' };
+  const values = { name, capacity, min_students: 1, head_user_id: '', principal_user_id: '', maintenance_user_id: '' };
   applyLegacyRoles(values, roles);
   if (supabase) {
     const { error } = await supabase.from('auditoriums').insert(values);
@@ -854,9 +994,15 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
 app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const auditoriums = await getAuditoriumConfigs();
+  const allUsers = await getUsers();
+  const headUsers = allUsers.filter((u) => u.role === 'head' || u.role === 'admin' || u.role === 'sub_admin');
   let stageCount = 4;
   auditoriums.forEach((a) => { const c = approvalRoles(a).length; if (c > stageCount) stageCount = c; });
   const stageSelect = (selected, nameAttr) => `<select name="${nameAttr}">${['none', 'head', 'electrician', 'principal', 'maintenance', 'chairman', 'admin_officer', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin'].map((role) => `<option value="${role}"${role === (selected || 'none') ? ' selected' : ''}>${role === 'none' ? '— None' : escapeHtml(roleNames[role] || role)}</option>`).join('')}</select>`;
+  const headUserSelect = (selectedId, nameAttr) => {
+    const options = headUsers.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selectedId ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.department)})</option>`).join('');
+    return `<select name="${nameAttr}" style="min-width:180px"><option value="">— Select department head —</option>${options}</select>`;
+  };
   const stageHeaders = (() => {
     let html = '';
     for (let n = 1; n <= stageCount; n++) {
@@ -871,7 +1017,8 @@ app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
     for (let i = 0; i < stageCount; i++) cells += `<td class="stage-cell">${stageSelect(stages[i], `approval_${i + 1}_${ri}`)}</td>`;
     return `<tr><input type="hidden" name="id[]" value="${escapeHtml(auditorium.id)}"><td>${escapeHtml(auditorium.id)}</td><td>${auditorium.is_locked ? `<strong>${auditoriumLabel(auditorium)}</strong>` : `<input name="name[]" value="${escapeHtml(auditorium.name)}" required>`}${cells}<td class="actions-cell">${actionButtons(auditorium)}</td></tr>`;
   }).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Manage<br><em>rooms</em></h1></div><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Edit names and approval routes per room. Add more approval columns for longer routes with "+ Add approval column", remove one with its × button, lock (disable) or delete a room.</p></section><div class="admin-tools"><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button></div><section class="table-wrap"><h3>Existing rooms</h3><form id="row-form" action="/admin/auditoriums/manage" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><table><thead><tr><th>Id</th><th>Name</th>${stageHeaders}<th style="width:220px">Actions</th></tr></thead><tbody>${rowForms}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save all changes</button></div></form></section><section class="table-wrap"><h3>Add a new room</h3><form action="/admin/auditoriums" method="post"><table><thead><tr><th>Name</th>${stageHeaders}</tr></thead><tbody><tr>${`<td><input name="name" placeholder="New room name" required></td>${Array.from({ length: stageCount }, (_, i) => `<td class="stage-cell">${stageSelect(i === 0 ? 'head' : i === 1 ? 'electrician' : i === 2 ? 'principal' : 'maintenance', `approval_${i + 1}`)}</td>`).join('')}`}</tr></tbody></table><div class="admin-tools"><button class="small-button" type="submit">Add room</button></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}var roleVals=['none','head','electrician','principal','maintenance','chairman','admin_officer','higher_authority','purchase_officer','work_done','department_user','sub_admin','admin'];function makeSelect(){var h='<select>'+roleVals.map(function(r){return '<option value="'+r+'">'+(r==='none'?'— None':r)+'</option>';}).join('')+'</select>';return h;}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function stageName(col,row){return 'approval_'+(col+1)+'_'+row;}function nameSelectsInRow(tr){Array.prototype.slice.call(tr.querySelectorAll('td.stage-cell select')).forEach(function(sel,ci){sel.name=stageName(ci,rowIndexOf(tr));});}function addStageColumn(){var tbody=document.querySelector('#row-form tbody');var theadTr=document.querySelector('#row-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);Array.prototype.slice.call(tbody.rows).forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=makeSelect;tr.insertBefore(td,tr.cells[tr.cells.length-2]);nameSelectsInRow(tr);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);Array.prototype.slice.call(document.querySelectorAll('#row-form tbody tr')).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;document.getElementById('stage_count').value=currentStages;}</script></body></html>`);
+  const headUserRows = auditoriums.map((auditorium, ri) => `<tr><td><strong>${escapeHtml(auditorium.name)}</strong></td><td>${headUserSelect(auditorium.head_user_id, `head_user_id_${ri}`)}<input type="hidden" name="aud_id[]" value="${escapeHtml(auditorium.id)}"></td></tr>`).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"><style>.head-config{margin:24px 0}.head-config table{width:100%}.head-config th{text-align:left;padding:10px;border-bottom:1px solid var(--ink);font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)}.head-config td{padding:10px;border-bottom:1px solid var(--line)}.head-config select{padding:8px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif;min-width:200px}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Manage<br><em>rooms</em></h1></div><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Set a department head for each auditorium. When a request comes in for that room, only the assigned head can approve step 1. If no head is set, the requesting department's head will approve instead.</p></section><section class="table-wrap head-config"><h3>Auditorium-wise department heads</h3><form id="head-form" action="/admin/auditoriums/heads" method="post"><table><thead><tr><th>Auditorium</th><th>Department Head (assigned to this auditorium)</th></tr></thead><tbody>${headUserRows}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save department heads</button></div></form></section><div class="admin-tools"><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button></div><section class="table-wrap"><h3>Existing rooms</h3><form id="row-form" action="/admin/auditoriums/manage" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><table><thead><tr><th>Id</th><th>Name</th>${stageHeaders}<th style="width:220px">Actions</th></tr></thead><tbody>${rowForms}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save all changes</button></div></form></section><section class="table-wrap"><h3>Add a new room</h3><form action="/admin/auditoriums" method="post"><table><thead><tr><th>Name</th>${stageHeaders}</tr></thead><tbody><tr>${`<td><input name="name" placeholder="New room name" required></td>${Array.from({ length: stageCount }, (_, i) => `<td class="stage-cell">${stageSelect(i === 0 ? 'head' : i === 1 ? 'electrician' : i === 2 ? 'principal' : 'maintenance', `approval_${i + 1}`)}</td>`).join('')}`}</tr></tbody></table><div class="admin-tools"><button class="small-button" type="submit">Add room</button></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}var roleVals=['none','head','electrician','principal','maintenance','chairman','admin_officer','higher_authority','purchase_officer','work_done','department_user','sub_admin','admin'];function makeSelect(name){var h='<select name="'+name+'">'+roleVals.map(function(r){return '<option value="'+r+'">'+(r==='none'?'— None':r)+'</option>';}).join('')+'</select>';return h;}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function stageName(col,row){return 'approval_'+(col+1)+'_'+row;}function nameSelectsInRow(tr){Array.prototype.slice.call(tr.querySelectorAll('td.stage-cell select')).forEach(function(sel,ci){sel.name=stageName(ci,rowIndexOf(tr));});}function addStageColumn(){var tbody=document.querySelector('#row-form tbody');var theadTr=document.querySelector('#row-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);Array.prototype.slice.call(tbody.rows).forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=makeSelect(stageName(currentStages-1,rowIndexOf(tr)));tr.insertBefore(td,tr.cells[tr.cells.length-2]);nameSelectsInRow(tr);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);Array.prototype.slice.call(document.querySelectorAll('#row-form tbody tr')).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;document.getElementById('stage_count').value=currentStages;}</script></body></html>`);
 });
 
 app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
@@ -891,7 +1038,7 @@ app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
       }
       while (roles.length && roles[roles.length - 1] === 'none') roles.pop();
       if (!roles.length) roles.push('head');
-      const values = { name: String(names[ri] || current.name).trim(), min_students: current.min_students || 1, capacity: current.capacity || 300, principal_user_id: current.principal_user_id || '', maintenance_user_id: current.maintenance_user_id || '' };
+      const values = { name: String(names[ri] || current.name).trim(), min_students: current.min_students || 1, capacity: current.capacity || 300, head_user_id: current.head_user_id || '', principal_user_id: current.principal_user_id || '', maintenance_user_id: current.maintenance_user_id || '' };
       applyLegacyRoles(values, roles);
       if (supabase) {
         const { error } = await supabase.from('auditoriums').update(values).eq('id', String(id));
@@ -906,6 +1053,37 @@ app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   res.redirect('/admin/auditoriums/manage');
 });
 
+app.post('/admin/auditoriums/heads', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const audIds = Array.isArray(req.body.aud_id) ? req.body.aud_id : [req.body.aud_id];
+  let columnMissing = false;
+  try {
+    for (let ri = 0; ri < audIds.length; ri++) {
+      const id = audIds[ri];
+      const headUserId = String(req.body[`head_user_id_${ri}`] || '').trim() || '';
+      if (supabase) {
+        const { error } = await supabase.from('auditoriums').update({ head_user_id: headUserId }).eq('id', String(id));
+        if (error) {
+          if (error.code === 'PGRST204' || (error.message && error.message.includes('head_user_id'))) {
+            columnMissing = true;
+          } else {
+            throw new Error(error.message);
+          }
+        }
+      } else {
+        const local = localAuditoriums.find((a) => String(a.id) === String(id));
+        if (local) local.head_user_id = headUserId;
+      }
+    }
+  } catch (e) {
+    return res.status(500).send(e.message);
+  }
+  if (columnMissing) {
+    return res.redirect('/admin/auditoriums/manage?msg=' + encodeURIComponent('Column head_user_id is missing. Run migrate-head-user-id.sql in Supabase SQL Editor, then try again.'));
+  }
+  res.redirect('/admin/auditoriums/manage');
+});
+
 app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const current = (await getAuditoriumConfigs()).find((auditorium) => String(auditorium.id) === req.params.id);
@@ -913,7 +1091,7 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   if (current.is_locked) return res.status(409).send('Unlock the auditorium before editing it.');
   const capacity = Number(req.body.capacity);
   const minStudents = Number(req.body.min_students);
-  const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
+  const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, head_user_id: req.body.head_user_id || '', principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
   if (!values.name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
   if (!Number.isInteger(minStudents) || minStudents < 1) return res.status(400).send('Minimum students must be a positive whole number.');
@@ -972,7 +1150,10 @@ app.get('/admin/departments', requireLogin, async (req, res) => {
     return `<section class="workspace-users" id="tab-${tab.key}" data-workspace="${tab.key}"><div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${list.length ? list.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions, tab.key)).join('') : '<tr><td colspan="6">No users assigned to this workspace yet.</td></tr>'}</tbody></table></div>${list.length ? '<p class="small-copy">Roles in this workspace: ' + tab.roles.map((role) => roleNames[role]).join(' · ') + '.</p>' : ''}</section>`;
   }).join('');
 
-  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${mergedUsers.length})</button>${workspaceTabs.map((tab) => { const count = mergedUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}</div>`;
+  const customRoleUsers = mergedUsers.filter((user) => !Object.keys(roleNames).includes(user.role));
+  const customPanel = customRoleUsers.length ? `<section class="workspace-users" id="tab-custom" data-workspace="custom">${usersTable(customRoleUsers, currentUser, departmentOptions, 'custom')}<p class="small-copy">Users with custom roles created manually.</p></section>` : '';
+
+  const tabNav = `<div class="workspace-tabs" role="tablist"><button class="workspace-tab active" data-workspace="all" type="button">👥 All users (${mergedUsers.length})</button>${workspaceTabs.map((tab) => { const count = mergedUsers.filter((user) => tab.roles.includes(user.role)).length; return `<button class="workspace-tab" data-workspace="${tab.key}" type="button">${tab.icon} ${escapeHtml(tab.title)} (${count})</button>`; }).join('')}${customRoleUsers.length ? `<button class="workspace-tab" data-workspace="custom" type="button">⭐ Custom roles (${customRoleUsers.length})</button>` : ''}</div>`;
 
   const roleSelectOptions = ['sub_admin', 'admin_officer', 'purchase_officer', 'purchase_clerk', 'chairman', 'department_user', 'head', 'maintenance', 'electrician', 'principal', 'work_done'].map((role) => `<option value="${role}">${roleNames[role]}</option>`).join('');
 
@@ -983,7 +1164,74 @@ app.get('/admin/departments', requireLogin, async (req, res) => {
   const flashMsg = req.query.msg ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">${escapeHtml(String(req.query.msg))}</p>` : '';
   const departmentRows = departments.map((department) => `<form class="create-user" action="/admin/departments/${encodeURIComponent(department.id)}" method="post"><input name="name" value="${escapeHtml(department.name)}" placeholder="Department name" required><button type="submit" onclick="return confirm('Are you sure you want to save changes to this department?')">Save changes</button><button formaction="/admin/departments/${encodeURIComponent(department.id)}/delete" type="submit" onclick="return confirm('Are you sure you want to delete this department?')">Delete</button></form>`).join('');
 
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Manage accounts and roles.</h2><p class="lede">Add, edit, and delete users, and assign each one a role. Switch between workspaces to see who belongs to each one.</p>${flashMsg}</section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role" required>${roleSelectOptions}</select><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Add a department</h3></div><p class="small-copy">Create the department here — it appears on the request form and in the Add a new user selector.</p><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Existing departments</h3></div>${departmentRows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>04</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>05</span><h3>Excel import and export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Departments template</a><a class="page-nav" href="/admin/departments/export">Departments Excel</a><a class="page-nav" href="/admin/users/template">Users template</a><a class="page-nav" href="/admin/users/export">Users Excel</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload departments</button></form><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload users</button></form></div><p class="small-copy">Departments Excel — required column: Name. Users Excel — required columns: Email, Name, Department, Role, Password.</p></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});</script></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Users and roles | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.workspace-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 22px}.workspace-tab{border:1px solid var(--line);background:transparent;color:var(--ink);padding:10px 14px;font:12px Arial,sans-serif;cursor:pointer}.workspace-tab.active{background:var(--ink);color:var(--paper)}.workspace-users{display:none}.workspace-users[data-workspace="all"][data-visible="1"],.workspace-users[data-visible="1"]{display:block}.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}@media(max-width:760px){.workspace-tabs{flex-direction:column}}</style></head><body><main class="shell panel"><header class="masthead"><h1>Users <em>and roles</em></h1><a class="page-nav" href="/dashboard">Back to main page</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Manage accounts and roles.</h2><p class="lede">Add, edit, and delete users, and assign each one a role. Switch between workspaces to see who belongs to each one.</p>${flashMsg}</section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><input name="phone" type="tel" placeholder="WhatsApp number (optional)"><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role" required>${roleSelectOptions}<option value="__custom__">⚙️ Custom role…</option></select><input name="custom_role" type="text" placeholder="Custom role name" style="display:none"><input name="password" placeholder="Password (min 6 chars)" required><button type="submit">Add user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Add a department</h3></div><p class="small-copy">Create the department here — it appears on the request form and in the Add a new user selector.</p><form class="create-user" action="/admin/departments" method="post"><input name="name" placeholder="Department name" required><button type="submit">Add department</button></form></section><section class="user-management"><div class="section-heading"><span>03</span><h3>Existing departments</h3></div>${departmentRows || '<p class="small-copy">No departments yet.</p>'}</section><section class="user-management"><div class="section-heading"><span>04</span><h3>Existing users by workspace</h3></div><p class="small-copy">Edit details or reset a password inline; delete removes the account. Use the tabs to focus on a single workspace.</p>${tabNav}${allTab}${customPanel}${workspacePanels}</section><section class="user-management"><div class="section-heading"><span>05</span><h3>Excel import and export</h3></div>${importNote}<div class="admin-tools"><a class="page-nav" href="/admin/departments/template">Departments template</a><a class="page-nav" href="/admin/departments/export">Departments Excel</a><a class="page-nav" href="/admin/users/template">Users template</a><a class="page-nav" href="/admin/users/export">Users Excel</a><form action="/admin/departments/import" method="post" enctype="multipart/form-data"><input type="file" name="departments_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload departments</button></form><form action="/admin/users/import" method="post" enctype="multipart/form-data"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload users</button></form></div><p class="small-copy">Departments Excel — required column: Name. Users Excel — required columns: Email, Name, Department, Role, Password.</p></section></main><script>const allSection=document.querySelector('#tab-all');allSection.dataset.visible='1';const tabs=Array.from(document.querySelectorAll('.workspace-tab'));const sections=Array.from(document.querySelectorAll('.workspace-users'));tabs.forEach(tab=>{tab.addEventListener('click',()=>{tabs.forEach(t=>t.classList.remove('active'));tab.classList.add('active');const key=tab.dataset.workspace;sections.forEach(s=>{if(s.id==='tab-'+key){s.dataset.visible='1';}else{s.dataset.visible='0';}});});});document.querySelectorAll('select[name="role"]').forEach(sel=>{const custom=sel.parentElement.querySelector('input[name="custom_role"]');function sync(){if(custom)custom.style.display=sel.value==='__custom__'?'inline-block':'none';}sel.addEventListener('change',sync);sync();});</script></body></html>`);
+});
+
+async function moduleUsersPage(req, res, { title, moduleKey, icon, roles, description }) {
+  const allUsers = await getUsers();
+  const roleAssignments = await getRoleAssignments();
+  const assignedRows = (roleAssignments || []).map((a) => ({ id: a.user_id, _assignment_id: a.id, name: a.name || '', department: a.department, role: a.role, is_disabled: false, password: '' }));
+  const mergedUsers = [...allUsers, ...assignedRows.filter((a) => !allUsers.some((u) => u.id === a.id && u.department === a.department && u.role === a.role))];
+  const moduleUsers = mergedUsers.filter((u) => roles.includes(u.role));
+  const currentUser = req.session.user.id;
+  const fetchedDepartments = await getDepartments();
+  const departments = fetchedDepartments && fetchedDepartments.length ? fetchedDepartments : localDepartments;
+  const departmentOptions = (selected) => {
+    const names = departments.map((d) => d.name);
+    const extra = selected && !names.includes(selected) ? `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>` : '';
+    return `${extra}${departments.map((d) => `<option value="${escapeHtml(d.name)}"${d.name === selected ? ' selected' : ''}>${escapeHtml(d.name)}</option>`).join('')}`;
+  };
+  const roleSelectOptions = roles.map((role) => `<option value="${role}">${escapeHtml(roleNames[role] || role)}</option>`).join('');
+  const flashMsg = req.query.msg ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">${escapeHtml(String(req.query.msg))}</p>` : '';
+  const imported = Number(req.query.imported || 0);
+  const importNote = imported > 0 ? `<p class="small-copy" style="color:var(--positive,#2e7d32)">Imported/updated ${imported} user(s) from Excel.</p>` : '';
+
+  const userRows = moduleUsers.length
+    ? `<div class="table-wrap"><table class="user-table"><thead><tr><th>Email</th><th>Name</th><th>Department</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead><tbody>${moduleUsers.map((candidate) => userRowTemplate(candidate, currentUser, departmentOptions, moduleKey)).join('')}</tbody></table></div>`
+    : '<p class="small-copy">No users found for this module.</p>';
+
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} Users | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>.user-table td{padding:10px}.user-table td input,.user-table td select{width:100%;min-width:0;box-sizing:border-box;padding:9px;border:1px solid var(--line);background:transparent;font:13px Arial,sans-serif}.user-table td select{width:auto}.user-table .user-actions{display:flex;gap:6px;align-items:center;white-space:nowrap}.user-table .user-actions input{margin-right:6px}.user-table .user-actions .small-button{margin:0}.user-table td form{margin:0}.module-nav{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 20px}.module-nav a{border:1px solid var(--line);background:transparent;color:var(--ink);padding:8px 12px;font:12px Arial,sans-serif;text-decoration:none}.module-nav a.active{background:var(--ink);color:var(--paper)}</style></head><body><main class="shell panel"><header class="masthead"><h1>${icon} ${escapeHtml(title)} <em>Users</em></h1><a class="page-nav" href="/admin/departments">All Users</a><a class="page-nav" href="/admin/pages">Admin</a></header><nav class="module-nav"><a href="/admin/users/common"${moduleKey === 'common' ? ' class="active"' : ''}>Common</a><a href="/admin/users/auditorium"${moduleKey === 'auditorium' ? ' class="active"' : ''}>Auditorium</a><a href="/admin/users/maintenance"${moduleKey === 'maintenance' ? ' class="active"' : ''}>Maintenance</a><a href="/admin/users/purchase"${moduleKey === 'purchase' ? ' class="active"' : ''}>Purchase</a><a href="/admin/users/car"${moduleKey === 'car' ? ' class="active"' : ''}>Car</a><a href="/admin/users/inventory"${moduleKey === 'inventory' ? ' class="active"' : ''}>Inventory</a></nav><section class="panel-intro"><p class="eyebrow">Admin only</p><h2>${escapeHtml(description)}</h2><p class="lede">Roles in this module: ${roles.map((r) => roleNames[r]).join(', ')}.</p>${flashMsg}${importNote}</section><section class="user-management"><div class="section-heading"><span>01</span><h3>Add a new user</h3></div><form class="create-user" action="/admin/users" method="post"><input name="id" type="email" placeholder="Email (login ID)" required><input name="name" placeholder="Full name" required><input name="phone" type="tel" placeholder="WhatsApp number (optional)"><select name="department" required><option value="">Select department</option>${departmentOptions('')}</select><select name="role">${roleSelectOptions}<option value="__custom__">⚙️ Custom role…</option></select><input name="custom_role" type="text" placeholder="Custom role name" style="display:none"><input name="password" type="password" placeholder="Password" required><button type="submit">Create user</button></form></section><section class="user-management"><div class="section-heading"><span>02</span><h3>Existing users (${moduleUsers.length})</h3></div>${userRows}</section><section class="user-management"><div class="section-heading"><span>03</span><h3>Import from Excel</h3></div><p class="small-copy">Download the template, fill in the data, and upload it back.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><a class="small-button" href="/admin/users/template?module=${moduleKey}">Download template</a><form action="/admin/users/import" method="post" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center"><input type="file" name="users_file" accept=".xlsx,.xls" required><button class="small-button" type="submit">Upload & import</button></form></div></section></main><script>document.querySelectorAll('select[name="role"]').forEach(sel=>{const custom=sel.parentElement.querySelector('input[name="custom_role"]');function sync(){if(custom)custom.style.display=sel.value==='__custom__'?'inline-block':'none';}sel.addEventListener('change',sync);sync();});</script></body></html>`);
+}
+
+app.get('/admin/users/common', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Common', moduleKey: 'common', icon: '👥', roles: ['admin', 'sub_admin', 'principal', 'higher_authority', 'chairman'], description: 'Shared administrative users across all modules.' });
+});
+
+app.get('/admin/users/auditorium', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Auditorium', moduleKey: 'auditorium', icon: '🎓', roles: ['head', 'department_user', 'admin_officer'], description: 'Auditorium request and approval users.' });
+});
+
+app.get('/admin/users/maintenance', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Maintenance', moduleKey: 'maintenance', icon: '🔧', roles: ['maintenance', 'electrician', 'work_done'], description: 'Maintenance request and inspection users.' });
+});
+
+app.get('/admin/users/purchase', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Purchase', moduleKey: 'purchase', icon: '🛒', roles: ['purchase_officer', 'purchase_clerk', 'admin_officer'], description: 'Purchase request and approval users.' });
+});
+
+app.get('/admin/users/car', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Car Requisition', moduleKey: 'car', icon: '🚗', roles: ['chairman', 'department_user', 'head'], description: 'Car requisition request and approval users.' });
+});
+
+app.get('/admin/users/inventory', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await moduleUsersPage(req, res, { title: 'Inventory', moduleKey: 'inventory', icon: '📦', roles: ['purchase_clerk', 'admin_officer'], description: 'Inventory management users.' });
+});
+
+app.get('/admin/users/template', requireLogin, (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const moduleKey = req.query.module || 'all';
+  const moduleRoles = { common: ['admin', 'sub_admin', 'principal'], auditorium: ['head', 'department_user', 'admin_officer'], maintenance: ['maintenance', 'electrician', 'work_done'], purchase: ['purchase_officer', 'purchase_clerk', 'admin_officer'], car: ['chairman', 'department_user', 'head'], inventory: ['purchase_clerk', 'admin_officer'] };
+  const roles = moduleRoles[moduleKey] || ['head', 'department_user'];
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([{ Email: 'user@svitvasad.ac.in', Name: 'User Name', Department: 'Computer Engineering', Role: roles[0], Password: 'pass123' }]), 'Users');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment(`users-${moduleKey}-template.xlsx`).send(buffer);
 });
 
 app.get('/admin/departments/template', requireLogin, (req, res) => {
@@ -1160,14 +1408,16 @@ app.post('/admin/requests/:id/delete', requireLogin, async (req, res) => {
 
 function requestRow(request, user, auditoriumConfigs) {
   const status = requestStatus(request, auditoriumConfigs);
+  const auditorium = auditoriumConfigs.find((a) => a.name === request.auditorium) || {};
+  const headInfo = auditorium.head_user_id ? `<small style="color:var(--orange);font-size:11px;display:block">Head: ${escapeHtml(auditorium.head_user_id)}</small>` : '';
     if (user.role === 'admin' || user.role === 'sub_admin') {
     const requesterLabel = request.requester_type === 'faculty' ? 'Faculty' : 'Student';
     const requesterDetail = escapeHtml(request.requester_name || request.faculty_name || request.requester_id || '');
     const enrollmentLine = request.requester_enrollment_no ? `<small>${escapeHtml(request.requester_type === 'faculty' ? 'Faculty' : 'Enrollment')}: ${escapeHtml(request.requester_enrollment_no)}</small>` : '';
     const contactDetail = [escapeHtml(request.requester_mobile || ''), escapeHtml(request.requester_branch || '')].filter(Boolean).join('<br>') || escapeHtml(request.requester_id);
-    return `<tr><td>${escapeHtml(request.department)}</td><td>${escapeHtml(request.program)}</td><td>${escapeHtml(request.student_count || 1)}</td><td>${escapeHtml(request.date)} to ${escapeHtml(request.end_date)}<small>${requestWhen(request)}</small></td><td>${escapeHtml(request.auditorium)}</td><td>${requesterDetail}${enrollmentLine}<small>${requesterLabel}</small></td><td>${contactDetail}</td><td>${status}</td><td>${approvalAction(request, user, auditoriumConfigs)} <a class="page-nav" href="/admin/requests/${encodeURIComponent(request.id)}/edit">Edit</a><form action="/admin/requests/${encodeURIComponent(request.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`;
+    return `<tr><td>${escapeHtml(request.department)}</td><td>${escapeHtml(request.program)}</td><td>${escapeHtml(request.student_count || 1)}</td><td>${escapeHtml(request.date)} to ${escapeHtml(request.end_date)}<small>${requestWhen(request)}</small></td><td>${escapeHtml(request.auditorium)}${headInfo}</td><td>${requesterDetail}${enrollmentLine}<small>${requesterLabel}</small></td><td>${contactDetail}</td><td>${status}</td><td>${approvalAction(request, user, auditoriumConfigs)} <a class="page-nav" href="/admin/requests/${encodeURIComponent(request.id)}/edit">Edit</a><form action="/admin/requests/${encodeURIComponent(request.id)}/delete" method="post"><button class="small-button" type="submit">Delete</button></form></td></tr>`;
   }
-  return `<tr><td>${escapeHtml(request.program)}<small>${escapeHtml(request.department)}</small></td><td>${escapeHtml(request.date)} to ${escapeHtml(request.end_date)}<small>${requestWhen(request)}</small></td><td>${escapeHtml(request.auditorium)}</td><td>${status}</td><td>${approvalAction(request, user, auditoriumConfigs)}</td></tr>`;
+  return `<tr><td>${escapeHtml(request.program)}<small>${escapeHtml(request.department)}</small></td><td>${escapeHtml(request.date)} to ${escapeHtml(request.end_date)}<small>${requestWhen(request)}</small></td><td>${escapeHtml(request.auditorium)}${headInfo}</td><td>${status}</td><td>${approvalAction(request, user, auditoriumConfigs)}</td></tr>`;
 }
 
 function requestStatus(request, auditoriumConfigs) {
@@ -1176,6 +1426,7 @@ function requestStatus(request, auditoriumConfigs) {
   if (!transition) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
   const stepRoleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance officer', chairman: 'Chairman', admin_officer: 'Admin officer', higher_authority: 'Higher authority', purchase_officer: 'Purchase officer', work_done: 'Work Inspector', department_user: 'Department staff' };
   let pendingLabel = stepRoleNames[transition.role] || moduleRoleLabel(transition.role) || transition.role;
+  if (transition.role === 'head' && auditorium.head_user_id) pendingLabel += ` (${escapeHtml(auditorium.head_user_id)})`;
   if (transition.role === 'principal' && auditorium.principal_user_id) pendingLabel += ` (${escapeHtml(auditorium.principal_user_id)})`;
   if (transition.role === 'maintenance' && auditorium.maintenance_user_id) pendingLabel += ` (${escapeHtml(auditorium.maintenance_user_id)})`;
   return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span><small>Pending: ${pendingLabel}</small>`;
@@ -1225,7 +1476,11 @@ function approvalAction(request, user, auditoriumConfigs) {
     return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
   }
   if (user.role !== transition.role) return '<span class="muted">Waiting</span>';
-  if (user.role === 'head' && !(user.departments || [user.department]).includes(request.department)) return '<span class="muted">Waiting</span>';
+  if (user.role === 'head') {
+    const auditoriumHead = auditorium.head_user_id;
+    if (auditoriumHead && user.id !== auditoriumHead) return '<span class="muted">Waiting</span>';
+    if (!auditoriumHead && !(user.departments || [user.department]).includes(request.department)) return '<span class="muted">Waiting</span>';
+  }
   if (transition.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return '<span class="muted">Waiting</span>';
   if (transition.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return '<span class="muted">Waiting</span>';
   return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
@@ -1279,9 +1534,11 @@ app.post('/admin/users', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const email = String(req.body.id || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
-  if (!req.body.name || !req.body.department || !req.body.role) return res.status(400).send('Name, department, and role are required.');
+  let role = String(req.body.role || '').trim();
+  const customRole = String(req.body.custom_role || '').trim();
+  if (role === '__custom__') role = customRole;
+  if (!req.body.name || !req.body.department || !role) return res.status(400).send('Name, department, and role are required.');
   const password = String(req.body.password || '').trim();
-  const role = req.body.role;
   const department = String(req.body.department).trim();
   const currentUsers = await getUsers();
   const existing = currentUsers.find((user) => user.id === email) || users.find((user) => user.id === email);
@@ -1308,6 +1565,7 @@ app.post('/admin/users', requireLogin, async (req, res) => {
     name: String(req.body.name).trim(),
     department,
     role,
+    phone: String(req.body.phone || '').trim() || null,
     password: password || (existing ? existing.password : '')
   };
   const localIndex = users.findIndex((user) => user.id === email);
@@ -1407,8 +1665,11 @@ app.post('/admin/users/:id', requireLogin, async (req, res) => {
   const email = String(req.body.id || '').trim().toLowerCase();
   if (!user) return res.status(404).send('User not found.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).send('Please enter a valid email address.');
-  if (!req.body.name || !req.body.department || !req.body.role) return res.status(400).send('Name, department, and role are required.');
-  const changes = { ...user, id: email, name: String(req.body.name).trim(), department: String(req.body.department).trim(), role: req.body.role };
+  let role = String(req.body.role || '').trim();
+  const customRole = String(req.body.custom_role || '').trim();
+  if (role === '__custom__') role = customRole;
+  if (!req.body.name || !req.body.department || !role) return res.status(400).send('Name, department, and role are required.');
+  const changes = { ...user, id: email, name: String(req.body.name).trim(), department: String(req.body.department).trim(), role, phone: String(req.body.phone || '').trim() || null };
   if (req.body.password) {
     if (String(req.body.password).length < 6) return res.status(400).send('Password must be at least 6 characters.');
     changes.password = req.body.password;
@@ -1838,6 +2099,9 @@ app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
   }
   await notifyPendingApprover({ ...request, status: transition.status }, await getAuditoriumConfigs());
   await notifyRequester({ ...request, status: transition.status }, transition.status);
+  if (transition.status === 'approved') {
+    await notifyFinalReport({ ...request, status: 'approved' }, await getAuditoriumConfigs());
+  }
   res.redirect('/admin');
 });
 
@@ -4030,6 +4294,60 @@ app.get('/admin/fees/report', requireLogin, async (req, res) => {
   }).join('');
   
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fees Report</title><link rel="stylesheet" href="/styles.css"><style>.report-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin:20px 0}.stat-box{padding:20px;border:1px solid var(--line);border-radius:8px;background:#f9f9f9}.stat-box strong{display:block;font-size:28px;margin-bottom:5px;color:var(--orange)}.table-wrap{overflow-x:auto;margin:20px 0}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Outstanding<br><em>Fees Report</em></h1></div><a class="page-nav" href="/admin/fees">Back to Fees Management</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/fees/report', req.session.user)}<section class="panel-intro"><p class="eyebrow">Fees Status</p><h2>Student fees reconciliation report.</h2><p class="lede">Overview of all students, their total fees, payments received, and outstanding balances.</p></section><div class="report-stats"><div class="stat-box"><strong>${reconciliation.length}</strong><span>Total Students</span></div><div class="stat-box"><strong>${paidStudents.length}</strong><span>Fully Paid</span></div><div class="stat-box"><strong>${partialPayments.length}</strong><span>Partial Payments</span></div><div class="stat-box"><strong>${pendingFees.length}</strong><span>Unpaid/Pending</span></div><div class="stat-box"><strong>₹${totalFeesDue.toFixed(2)}</strong><span>Total Outstanding</span></div></div><section class="table-wrap"><table><thead><tr><th>Enrollment</th><th>Student Name</th><th>Department</th><th>Total Fees</th><th>Paid Amount</th><th>Outstanding</th><th>Status</th><th>Last Payment</th></tr></thead><tbody>${reportRows}</tbody></table></section></main></body></html>`);
+});
+
+// --- Logo management ---
+let localLogoUrl = null;
+
+async function getLogoUrl() {
+  if (!supabase) return localLogoUrl;
+  try {
+    const { data, error } = await supabase.from('system_settings').select('value').eq('key', 'COLLEGE_LOGO_URL').maybeSingle();
+    if (error || !data) return localLogoUrl;
+    return data.value || localLogoUrl;
+  } catch { return localLogoUrl; }
+}
+
+async function setLogoUrl(url) {
+  if (!supabase) { localLogoUrl = url; return; }
+  try {
+    await supabase.from('system_settings').upsert({ key: 'COLLEGE_LOGO_URL', value: url }, { onConflict: 'key' });
+  } catch { localLogoUrl = url; }
+}
+
+app.get('/admin/logo', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  const currentLogo = await getLogoUrl();
+  const logoPreview = currentLogo ? `<div style="margin:16px 0"><img src="${escapeHtml(currentLogo)}" alt="College logo" style="max-width:200px;max-height:120px;border:1px solid var(--line);padding:8px;border-radius:4px"></div>` : '<p class="small-copy">No logo uploaded yet. The default text heading is displayed.</p>';
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Upload Logo | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Upload<br><em>logo</em></h1></div><a class="page-nav" href="/admin">Back to admin</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin/logo', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>College logo.</h2><p class="lede">Upload the institute logo that will be displayed on all pages. Supported formats: JPG, PNG, SVG. Max 2MB.</p></section><section class="user-management"><div class="section-heading"><h3>Current logo</h3></div>${logoPreview}<form class="create-user" action="/admin/logo/upload" method="post" enctype="multipart/form-data"><div style="margin:16px 0"><label style="font:12px Arial;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:block;margin-bottom:8px">Choose logo file</label><input type="file" name="logo" accept="image/*" required style="padding:10px;border:1px solid var(--line);border-radius:4px;width:100%"></div><button type="submit" onclick="return confirm('Upload this logo? It will replace the current one.')">Upload logo</button></form>${currentLogo ? `<form class="create-user" action="/admin/logo/delete" method="post" style="margin-top:16px"><button class="reject-button" type="submit" onclick="return confirm('Remove the current logo and revert to text heading?')">Remove logo</button></form>` : ''}</section></main></body></html>`);
+});
+
+app.post('/admin/logo/upload', requireLogin, upload.single('logo'), async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (!req.file) return res.status(400).send('Please select a logo file.');
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.svg', '.gif', '.webp'];
+  if (!allowedExts.includes(ext)) return res.status(400).send('Unsupported file type. Please upload JPG, PNG, SVG, GIF, or WebP.');
+  const logoDir = path.join(__dirname, 'public', 'uploads');
+  if (!fs.existsSync(logoDir)) fs.mkdirSync(logoDir, { recursive: true });
+  const filename = `college-logo-${Date.now()}${ext}`;
+  const filepath = path.join(logoDir, filename);
+  fs.writeFileSync(filepath, req.file.buffer);
+  const logoUrl = `/uploads/${filename}`;
+  await setLogoUrl(logoUrl);
+  res.redirect('/admin/logo');
+});
+
+app.post('/admin/logo/delete', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  await setLogoUrl(null);
+  res.redirect('/admin/logo');
+});
+
+app.get('/uploads/:filename', (req, res) => {
+  const filePath = path.join(__dirname, 'public', 'uploads', req.params.filename);
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+  res.sendFile(filePath);
 });
 
 app.listen(port, () => {
