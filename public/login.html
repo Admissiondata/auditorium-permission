@@ -6,54 +6,68 @@
   <title>Sign in | SVIT Vasad</title>
   <link rel="stylesheet" href="/styles.css">
   <style>
-    .login-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 0; min-height: 80vh; }
-    .login-left { background: var(--ink); color: var(--paper); padding: 60px 50px; display: flex; flex-direction: column; justify-content: center; }
-    .login-left h1 { font-size: clamp(36px, 5vw, 56px); font-weight: 700; margin: 0 0 20px; letter-spacing: 0.06em; }
-    .login-left .rule { width: 50px; height: 3px; background: var(--lime); margin: 25px 0; }
-    .login-left p { font: 15px/1.6 Arial, sans-serif; color: var(--muted); margin: 0 0 15px; }
-    .login-left .feature-list { list-style: none; padding: 0; margin: 30px 0 0; }
-    .login-left .feature-list li { padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.1); font: 14px/1.5 Arial, sans-serif; display: flex; align-items: center; gap: 12px; }
-    .login-left .feature-list .icon { font-size: 20px; }
-    .login-right { padding: 60px 50px; display: flex; flex-direction: column; justify-content: center; }
-    .login-right .eyebrow { color: var(--orange); margin-bottom: 15px; }
-    .login-right h2 { font-size: 36px; font-weight: 400; margin: 0 0 35px; line-height: 1.1; }
-    .login-right h2 em { font-style: italic; }
+    .login-shell { max-width: 100%; padding: 0; }
+    .login-layout { min-height: 100vh; }
+    .login-left { padding: 60px 56px; position: relative; }
+    .login-left .brand { position: absolute; top: 40px; left: 56px; }
+    .login-left .brand h2 { font-size: 14px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.5); margin: 0; }
+    .login-left .brand p { font-size: 11px; color: rgba(255,255,255,0.3); margin: 4px 0 0; letter-spacing: 0.06em; }
+    .login-left .hero { margin-top: 80px; }
+    .login-left h1 { font-size: clamp(40px, 5vw, 60px); font-weight: 700; margin: 0 0 24px; letter-spacing: 0.02em; line-height: 1.05; }
+    .login-left .rule { width: 50px; height: 3px; background: var(--lime); margin: 0 0 28px; border-radius: 2px; }
+    .login-left .tagline { font-size: 16px; line-height: 1.6; color: rgba(255,255,255,0.5); margin: 0 0 40px; max-width: 360px; }
+    .login-left .feature-list { list-style: none; padding: 0; margin: 0; }
+    .login-left .feature-list li { padding: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; line-height: 1.5; display: flex; align-items: center; gap: 14px; color: rgba(255,255,255,0.7); }
+    .login-left .feature-list .icon { font-size: 20px; width: 28px; text-align: center; }
+    .login-left .footer-note { position: absolute; bottom: 40px; left: 56px; font-size: 12px; color: rgba(255,255,255,0.25); }
+    .login-right { padding: 60px 56px; display: flex; flex-direction: column; justify-content: center; }
+    .login-right .eyebrow { color: var(--orange); margin-bottom: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 600; }
+    .login-right h2 { font-size: 38px; font-weight: 400; margin: 0 0 40px; line-height: 1.1; letter-spacing: -0.02em; }
+    .login-right h2 em { font-style: italic; color: var(--orange); }
     .login-form { max-width: 400px; }
-    .login-form label { display: flex; flex-direction: column; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-family: Arial, sans-serif; margin-bottom: 25px; }
-    .login-form input { font: 17px Georgia, serif; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--line); padding: 10px 0 14px; outline: 0; width: 100%; }
-    .login-form input:focus { border-color: var(--ink); }
-    .login-form button { width: 100%; margin-top: 10px; padding: 14px; font-size: 14px; }
-    .login-help { font: 12px/1.5 Arial, sans-serif; color: var(--muted); margin-top: 25px; }
-    .request-links { margin-top: 35px; padding-top: 25px; border-top: 1px solid var(--line); }
-    .request-links p { font: 11px Arial, sans-serif; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 15px; }
-    .request-links a { display: block; padding: 14px 18px; margin-bottom: 10px; font: 14px/1.4 Arial, sans-serif; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: 4px; transition: all 0.2s; }
+    .login-form label { display: flex; flex-direction: column; gap: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 500; margin-bottom: 28px; }
+    .login-form input { font-size: 16px; padding: 12px 0 14px; border: 0; border-bottom: 2px solid var(--line); border-radius: 0; background: transparent; }
+    .login-form input:focus { border-color: var(--ink); box-shadow: none; }
+    .login-form button { width: 100%; margin-top: 12px; padding: 15px; font-size: 14px; border-radius: var(--radius-sm); }
+    .login-help { font-size: 12px; line-height: 1.5; color: var(--muted); margin-top: 24px; }
+    .login-help a { color: var(--orange); text-decoration: none; font-weight: 600; }
+    .login-help a:hover { text-decoration: underline; }
+    .request-links { margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--line); }
+    .request-links p { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 16px; font-weight: 600; }
+    .request-links a { display: flex; align-items: center; gap: 10px; padding: 14px 16px; margin-bottom: 8px; font-size: 14px; line-height: 1.4; color: var(--ink); text-decoration: none; border: 1px solid var(--line); border-radius: var(--radius-sm); transition: all 0.2s; }
     .request-links a:hover { border-color: var(--ink); background: var(--ink); color: var(--paper); }
-    .request-links a .link-icon { margin-right: 10px; }
+    .request-links .link-icon { font-size: 16px; width: 22px; text-align: center; }
     @media (max-width: 860px) {
       .login-layout { grid-template-columns: 1fr; }
-      .login-left { padding: 40px 30px; }
-      .login-right { padding: 40px 30px; }
+      .login-left { padding: 40px 28px; min-height: auto; }
+      .login-left .brand { position: static; margin-bottom: 40px; }
+      .login-left .hero { margin-top: 0; }
+      .login-left .footer-note { position: static; margin-top: 40px; }
+      .login-right { padding: 40px 28px; }
     }
   </style>
 </head>
 <body>
-  <main class="shell">
-    <div class="college-heading">
-      <h1>SVIT VASAD</h1>
-    </div>
-
+  <main class="shell login-shell">
     <div class="login-layout">
       <section class="login-left">
-        <h1>Welcome<br>back.</h1>
-        <div class="rule"></div>
-        <p>Sign in to access the approval desk for auditorium permissions and maintenance requests.</p>
-        <ul class="feature-list">
-          <li><span class="icon">🏛️</span> Auditorium permission approvals</li>
-          <li><span class="icon">🔧</span> Maintenance & repair requests</li>
-          <li><span class="icon">✅</span> Approve or reject requests</li>
-          <li><span class="icon">👥</span> Manage users & departments</li>
-          <li><span class="icon">📊</span> View all requests</li>
-        </ul>
+        <div class="brand">
+          <h2>SVIT Vasad</h2>
+          <p>Campus Management System</p>
+        </div>
+        <div class="hero">
+          <h1>Welcome<br>back.</h1>
+          <div class="rule"></div>
+          <p class="tagline">Sign in to access the approval desk for auditorium permissions, maintenance requests, and campus administration.</p>
+          <ul class="feature-list">
+            <li><span class="icon">🏛️</span> Auditorium permission approvals</li>
+            <li><span class="icon">🔧</span> Maintenance & repair requests</li>
+            <li><span class="icon">✅</span> Approve or reject requests</li>
+            <li><span class="icon">👥</span> Manage users & departments</li>
+            <li><span class="icon">📊</span> View all requests & reports</li>
+          </ul>
+        </div>
+        <div class="footer-note">Sardar Vallabhbhai Patel Institute of Technology, Vasad Campus</div>
       </section>
 
       <section class="login-right">
@@ -61,15 +75,15 @@
         <h2>Enter your<br><em>credentials.</em></h2>
 
         <form class="login-form" action="/login" method="post">
-          <label>Email ID
-            <input name="user_id" type="email" autocomplete="username" placeholder="name@svitvasad.ac.in" required>
+          <label>Email ID / Username
+            <input name="user_id" type="text" autocomplete="username" placeholder="admin or name@svitvasad.ac.in" required>
           </label>
           <label>Password
             <input name="password" type="password" autocomplete="current-password" required>
           </label>
           <button type="submit">Open approval desk <span>↗</span></button>
-          <p class="login-help"><a href="/forgot-password" style="color:var(--orange);text-decoration:none">Forget password?</a></p>
-          <p class="login-help">Department Heads are assigned by the administrator.</p>
+          <p class="login-help"><a href="/forgot-password">Forgot password?</a></p>
+          <p class="login-help">Administrator & Department Heads sign in using their SVIT credentials.</p>
         </form>
 
         <div class="request-links">
@@ -81,8 +95,6 @@
         </div>
       </section>
     </div>
-
-    <footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer>
   </main>
 </body>
 </html>

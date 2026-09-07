@@ -18,7 +18,7 @@ create table if not exists public.requests (
   requester_branch text,
   requester_mobile text,
   rejection_remarks text,
-  status text not null default 'pending' check (status in ('pending', 'first_approved', 'second_approved', 'third_approved', 'approved', 'rejected')),
+  status text not null default 'pending' check (status in ('pending', 'first_approved', 'second_approved', 'third_approved', 'fourth_approved', 'approved', 'rejected')),
   created_at timestamptz not null default now()
 );
 
@@ -100,7 +100,7 @@ alter table public.requests add constraint requests_duration_check check (durati
 alter table public.requests drop constraint if exists requests_status_check;
 update public.requests set status = 'first_approved' where status = 'head_approved';
 update public.requests set status = 'second_approved' where status in ('electrician_approved', 'principal_approved', 'maintenance_approved');
-alter table public.requests add constraint requests_status_check check (status in ('pending', 'first_approved', 'second_approved', 'third_approved', 'approved', 'rejected'));
+alter table public.requests add constraint requests_status_check check (status in ('pending', 'first_approved', 'second_approved', 'third_approved', 'fourth_approved', 'approved', 'rejected'));
 
 alter table public.requests enable row level security;
 
