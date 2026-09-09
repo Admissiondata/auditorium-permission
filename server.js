@@ -227,6 +227,17 @@ const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMT
   : null;
 let senderEmail = process.env.SMTP_FROM || process.env.SMTP_USER || 'nodalofficer@svitvasad.ac.in';
 
+if (mailer) {
+  const originalSendMail = mailer.sendMail.bind(mailer);
+  mailer.sendMail = async (options = {}) => {
+    const normalizedOptions = { ...options };
+    if (normalizedOptions.subject) normalizedOptions.subject = String(normalizedOptions.subject).toUpperCase();
+    if (normalizedOptions.text) normalizedOptions.text = String(normalizedOptions.text).toUpperCase();
+    if (normalizedOptions.html) normalizedOptions.html = String(normalizedOptions.html).toUpperCase();
+    return originalSendMail(normalizedOptions);
+  };
+}
+
 // --- WhatsApp notifications ---
 // Uses the Meta WhatsApp Cloud API when WHATSAPP_TOKEN + WHATSAPP_PHONE_NUMBER_ID are set.
 // Falls back to a wa.me deep link (logged) so messages can still be shared manually.
@@ -424,12 +435,28 @@ async function notifyFinalReport(request, auditoriumConfigs) {
   }
 }
 
+function isPastDateAllowedForUser(user) {
+  return Boolean(user && isAdmin(user));
+}
+
+function isPastDateValue(dateValue) {
+  if (!dateValue) return false;
+  const match = /^\d{4}-\d{2}-\d{2}$/.exec(String(dateValue));
+  if (!match) return false;
+  const [year, month, day] = String(dateValue).split('-').map(Number);
+  const selectedDate = new Date(year, month - 1, day);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return selectedDate < today;
+}
+
 async function renderRequestPage(req, res) {
   try {
     const viewerIsAdmin = Boolean(req.session && req.session.user && isAdmin(req.session.user));
     const requestPageEnabled = (await getSystemSetting('REQUEST_PAGE_ENABLED')) !== 'false';
     const page = require('node:fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
     const heading = await collegeHeading();
+    const todayIso = new Date().toISOString().slice(0, 10);
     if (!requestPageEnabled && !viewerIsAdmin) {
       const disabledHtml = '<section class="main-content"><p class="eyebrow">Requests closed</p><h1>Auditorium<br><em>permission</em></h1><p class="lede">The auditorium request page has been temporarily disabled by an administrator.</p><div style="padding:24px;border:1px solid var(--orange);border-radius:4px;color:var(--ink);font:15px/1.6 Arial,sans-serif"><strong>Requests are currently closed.</strong><br>New auditorium requests cannot be submitted right now. Please try again later or contact the administrator for assistance.</div></section>';
       res.send(page.replace(/<div class="college-heading">[\s\S]*?<\/div>/, heading).replace(/<section class="main-content">[\s\S]*?<\/section>\s*<\/div>\s*<footer>/, () => `${disabledHtml}</div>\n    <footer>`));
@@ -447,9 +474,11 @@ async function renderRequestPage(req, res) {
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
     const availableCount = auditoriumConfigs.filter((auditorium) => !auditorium.is_locked).length;
     let result = page
+      .replace('<body>', `<body data-allow-past-dates="${viewerIsAdmin ? 'true' : 'false'}">`)
       .replace(/<div class="college-heading">[\s\S]*?<\/div>/, heading)
       .replace('<input name="department" placeholder="e.g. Computer Engineering" required>', `<select name="department" required><option value="">Select department</option>${departmentOptions}</select>`)
       .replace('<label>Branch / Department<input name="requester_branch" placeholder="e.g. Computer Engineering" required></label>', `<label>Branch / Department<select name="requester_branch" required><option value="">Select branch</option>${departmentOptions}</select></label>`)
+      .replace('<label>Date<input name="slot_date[]" type="date" required></label>', `<label>Date<input name="slot_date[]" type="date"${viewerIsAdmin ? '' : ` min="${todayIso}"`} required></label>`)
       .replace(/<fieldset><legend>Choose auditorium<\/legend>[\s\S]*?<\/fieldset>/, `<fieldset><legend>Choose auditorium</legend>${options}</fieldset>`)
       .replace(/<strong>\d+<\/strong>\s*<span>Auditoriums available<\/span>/, `<strong>${availableCount < 10 ? '0' + availableCount : availableCount}</strong>\n          <span>Auditoriums available</span>`);
     result = result.replace(/<select name="department" required><option value="">Select department<\/option><\/select>/g, `<select name="department" required>${purchaseDepartmentOptions}</select>`);
@@ -2285,6 +2314,10 @@ app.post('/requests', async (req, res) => {
 
   if (!request.department || !request.program || !request.date || !request.auditorium || !Number.isInteger(request.student_count) || request.student_count < 1) {
     return res.status(400).send('Department, program, date, and auditorium are required.');
+  }
+
+  if (!isPastDateAllowedForUser(req.session?.user) && timeSlots.some((slot) => isPastDateValue(slot.date))) {
+    return res.status(400).send('Past dates cannot be selected. Please choose a current or future date.');
   }
 
   if (!['1 day', '2 days', 'multiple days'].includes(request.duration)) return res.status(400).send('Please choose a valid duration.');

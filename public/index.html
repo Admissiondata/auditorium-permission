@@ -213,7 +213,12 @@
 
     addSlotButton.addEventListener('click', () => {
       const slot = slotList.querySelector('.slot-row').cloneNode(true);
-      slot.querySelectorAll('input').forEach((input) => { input.value = ''; });
+      slot.querySelectorAll('input').forEach((input) => {
+        input.value = '';
+        if (input.name === 'slot_date[]') {
+          setDateInputLimits(input);
+        }
+      });
       const removeButton = slot.querySelector('.remove-slot');
       removeButton.hidden = false;
       removeButton.addEventListener('click', () => slot.remove());
@@ -265,6 +270,52 @@
     }
 
     const requestForm = document.querySelector('.request-form:not([style*="display:none"])') || document.querySelector('.request-form');
+    const allowPastDates = document.body.dataset.allowPastDates === 'true';
+    const todayISO = new Date().toISOString().split('T')[0];
+
+    function setDateInputLimits(dateInput) {
+      if (!dateInput) return;
+      if (allowPastDates) {
+        dateInput.removeAttribute('min');
+        dateInput.setCustomValidity('');
+        return;
+      }
+      dateInput.min = todayISO;
+      const selectedValue = dateInput.value;
+      if (selectedValue && selectedValue < todayISO) {
+        dateInput.setCustomValidity('Past dates cannot be selected.');
+      } else {
+        dateInput.setCustomValidity('');
+      }
+    }
+
+    function validatePastDates(showMessage = false) {
+      if (allowPastDates) return true;
+      const dateInputs = requestForm ? requestForm.querySelectorAll('input[name="slot_date[]"]') : [];
+      let firstInvalid = null;
+      for (const dateInput of dateInputs) {
+        const value = dateInput.value;
+        if (!value) continue;
+        const isPast = value < todayISO;
+        dateInput.setCustomValidity(isPast ? 'Past dates cannot be selected.' : '');
+        if (isPast) {
+          firstInvalid = dateInput;
+        }
+      }
+      if (firstInvalid && showMessage) {
+        firstInvalid.reportValidity();
+      }
+      return !firstInvalid;
+    }
+
+    requestForm?.querySelectorAll('input[name="slot_date[]"]').forEach((dateInput) => {
+      setDateInputLimits(dateInput);
+      dateInput.addEventListener('input', () => {
+        setDateInputLimits(dateInput);
+        validatePastDates(true);
+      });
+    });
+
     if (requestForm && requestForm.id !== 'purchase-local' && requestForm.id !== 'purchase-stationary' && requestForm.id !== 'purchase-cleaning') {
       const studentCountInput = requestForm.querySelector('input[name="student_count"]');
       const auditoriumInputs = requestForm.querySelectorAll('input[name="auditorium"]');
@@ -295,9 +346,12 @@
       });
 
       requestForm.addEventListener('submit', (e) => {
-        if (!validateMinStudentCount(true)) {
+        const validPastDates = validatePastDates(true);
+        const validMinStudents = validateMinStudentCount(true);
+        if (!validPastDates || !validMinStudents) {
           e.preventDefault();
-          studentCountInput.focus();
+          const firstInvalid = requestForm.querySelector('input[name="slot_date[]"]:invalid, input[name="student_count"]:invalid') || studentCountInput;
+          if (firstInvalid) firstInvalid.focus();
         }
       });
     }
