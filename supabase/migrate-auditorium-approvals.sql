@@ -1,10 +1,15 @@
 alter table public.auditoriums
-  add column if not exists approval_1_role text not null default 'head',
-  add column if not exists approval_2_role text not null default 'electrician',
-  add column if not exists approval_3_role text not null default 'principal';
-alter table public.auditoriums add column if not exists approval_4_role text not null default 'maintenance';
-alter table public.auditoriums add column if not exists is_locked boolean not null default false;
-alter table public.auditoriums add column if not exists capacity integer not null default 300;
+  add column if not exists approval_1_role text not null default 'head' check (approval_1_role in ('none', 'head', 'electrician', 'principal', 'maintenance', 'admin_officer', 'chairman', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin')),
+  add column if not exists approval_2_role text not null default 'electrician' check (approval_2_role in ('none', 'head', 'electrician', 'principal', 'maintenance', 'admin_officer', 'chairman', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin')),
+  add column if not exists approval_3_role text not null default 'principal' check (approval_3_role in ('none', 'head', 'electrician', 'principal', 'maintenance', 'admin_officer', 'chairman', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin')),
+  add column if not exists approval_4_role text not null default 'maintenance' check (approval_4_role ~ '^(none|head|electrician|principal|maintenance|admin_officer|chairman|higher_authority|purchase_officer|work_done|department_user|sub_admin|admin)(\|(head|electrician|principal|maintenance|admin_officer|chairman|higher_authority|purchase_officer|work_done|department_user|sub_admin|admin))*$'),
+  add column if not exists is_locked boolean not null default false,
+  add column if not exists capacity integer not null default 300,
+  add column if not exists head_user_id text,
+  add column if not exists principal_user_id text,
+  add column if not exists maintenance_user_id text,
+  add column if not exists electrician_user_id text,
+  add column if not exists admin_officer_user_id text;
 alter table public.auditoriums drop constraint if exists auditoriums_capacity_check;
 alter table public.auditoriums add constraint auditoriums_capacity_check check (capacity > 0);
 

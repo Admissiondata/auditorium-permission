@@ -76,10 +76,10 @@ const localDepartments = [
   { id: 1, name: 'Computer Engineering', head_user_id: 'hod.computer@svitvasad.ac.in', email: '', designation: '' }
 ];
 const localAuditoriums = [
-  { id: 1, name: 'Architecture Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
-  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
-  { id: 3, name: 'Main Auditorium', capacity: 500, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' },
-  { id: 4, name: 'Seminar Auditorium', capacity: 250, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '' }
+  { id: 1, name: 'Architecture Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '', electrician_user_id: '', admin_officer_user_id: '' },
+  { id: 2, name: 'Aeronautical Auditorium', capacity: 300, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '', electrician_user_id: '', admin_officer_user_id: '' },
+  { id: 3, name: 'Main Auditorium', capacity: 500, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '', electrician_user_id: '', admin_officer_user_id: '' },
+  { id: 4, name: 'Seminar Auditorium', capacity: 250, min_students: 1, approval_1_role: 'head', approval_2_role: 'electrician', approval_3_role: 'principal', approval_4_role: 'maintenance', head_user_id: '', principal_user_id: '', maintenance_user_id: '', electrician_user_id: '', admin_officer_user_id: '' }
 ];
 const users = [
   { id: 'admin@svitvasad.ac.in', password: 'admin123', name: 'System administrator', role: 'admin', department: 'All departments' },
@@ -322,6 +322,12 @@ async function approverEmail(role, request, auditorium) {
   }
   if (role === 'maintenance' && auditorium?.maintenance_user_id) {
     return auditorium.maintenance_user_id;
+  }
+  if (role === 'electrician' && auditorium?.electrician_user_id) {
+    return auditorium.electrician_user_id;
+  }
+  if (role === 'admin_officer' && auditorium?.admin_officer_user_id) {
+    return auditorium.admin_officer_user_id;
   }
   return (await getUsers()).find((user) => user.role === role)?.id;
 }
@@ -576,7 +582,7 @@ app.post('/forgot-password', async (req, res) => {
   const allUsers = await getUsers();
   const user = allUsers.find((candidate) => candidate.id === email);
   const heading = await collegeHeading();
-  const successHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reset Instructions Sent | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>${forgotStyle}.success-box{border:1px solid var(--positive,#2e7d32);background:rgba(46,125,50,.06);padding:24px;border-radius:var(--radius-sm);margin-bottom:25px}.success-box strong{display:block;margin-bottom:8px;font-size:16px}.success-box p{margin:0;font-size:14px;line-height:1.5;color:var(--muted)}</style></head><body><main class="shell"><div class="login-layout"><section class="login-left"><div class="brand"><h2>SVIT Vasad</h2><p>Campus Management System</p></div><h1>Check your<br>inbox.</h1><div class="rule"></div><p>If an account exists for that email, you will receive password reset instructions shortly.</p></section><section class="login-right"><p class="eyebrow">Instructions sent</p><h2>Password reset<br><em>instructions sent.</em></h2><div class="success-box"><strong>Email sent</strong><p>We have sent an email to <strong>${escapeHtml(email)}</strong> with instructions to reset your password. Please check your inbox and follow the link in the email.</p></div><p class="login-help" style="margin-top:30px"><strong>Didn't get the email?</strong><br>Check your spam or junk folder, or contact the administrator for help.</p><p class="login-help"><a href="/login">← Back to sign in</a></p></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main></body></html>`;
+  const successHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reset Instructions Sent | SVIT Vasad</title><link rel="stylesheet" href="/styles.css"><style>${forgotStyle}.success-box{border:1px solid var(--positive,#2e7d32);background:rgba(46,125,50,.06);padding:24px;border-radius:var(--radius-sm);margin-bottom:25px}.success-box strong{display:block;margin-bottom:8px;font-size:16px}.success-box p{margin:0;font-size:14px;line-height:1.5;color:var(--muted)}</style></head><body><main class="shell"><div class="login-layout"><section class="login-left"><div class="brand"><h2>SVIT Vasad</h2><p>Campus Management System</p></div><h1>Check your<br>inbox.</h1><div class="rule"></div><p>If an account exists for that email, you will receive password reset instructions shortly.</p></section><section class="login-right"><p class="eyebrow">Instructions sent</p><h2>Password reset<br><em>instructions sent.</em></h2><div class="success-box"><strong>Email sent</strong><p>We have sent an email to <strong><span class="email">${escapeHtml(email)}</span></strong> with instructions to reset your password. Please check your inbox and follow the link in the email.</p></div><p class="login-help" style="margin-top:30px"><strong>Didn't get the email?</strong><br>Check your spam or junk folder, or contact the administrator for help.</p><p class="login-help"><a href="/login">← Back to sign in</a></p></section></div><footer><span>Auditorium Registration Application</span><span>Admissiondata / 2026</span></footer></main></body></html>`;
   if (user && mailer) {
     try {
       await mailer.sendMail({
@@ -903,7 +909,7 @@ const userRowTemplate = (candidate, currentUser, departmentOptions, prefix = 'al
   const customRole = !isPresetRole ? candidate.role : '';
 
   if (isAssignment) {
-    return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}/assignment" method="post"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><input type="hidden" name="assignment_id" value="${escapeHtml(String(candidate._assignment_id || ''))}"><input type="hidden" name="orig_department" value="${escapeHtml(candidate.department)}"><input type="hidden" name="orig_role" value="${escapeHtml(candidate.role)}"></form><strong>${escapeHtml(candidate.id)}</strong>${multiRoleNote}</td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select><input form="${formId}" name="custom_role" value="${escapeHtml(customRole)}" placeholder="Custom role name" style="display:none" aria-label="Custom role"></td><td>${statusBadge}</td><td class="user-actions"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Save changes to this role assignment?')">Save</button> <form action="/admin/users/${encodeURIComponent(candidate.id)}/assignment/delete" method="post" style="display:inline" onsubmit="return confirm('Remove role (${escapeHtml(candidate.role)}) for ${escapeHtml(candidate.id)} from this workspace?')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><input type="hidden" name="assignment_id" value="${escapeHtml(String(candidate._assignment_id || ''))}"><input type="hidden" name="department" value="${escapeHtml(candidate.department)}"><input type="hidden" name="role" value="${escapeHtml(candidate.role)}"><button class="small-button reject-button" type="submit">Delete role</button></form>${canDelete ? ` <form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post" style="display:inline" onsubmit="return confirm('Delete this entire user account (${escapeHtml(candidate.id)}) and all their roles permanently?')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><button class="small-button" type="submit">Delete user</button></form>` : ''}</td></tr>`;
+    return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}/assignment" method="post"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><input type="hidden" name="assignment_id" value="${escapeHtml(String(candidate._assignment_id || ''))}"><input type="hidden" name="orig_department" value="${escapeHtml(candidate.department)}"><input type="hidden" name="orig_role" value="${escapeHtml(candidate.role)}"></form><strong class="email">${escapeHtml(candidate.id)}</strong>${multiRoleNote}</td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select><input form="${formId}" name="custom_role" value="${escapeHtml(customRole)}" placeholder="Custom role name" style="display:none" aria-label="Custom role"></td><td>${statusBadge}</td><td class="user-actions"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Save changes to this role assignment?')">Save</button> <form action="/admin/users/${encodeURIComponent(candidate.id)}/assignment/delete" method="post" style="display:inline" onsubmit="return confirm('Remove role (${escapeHtml(candidate.role)}) for ${escapeHtml(candidate.id)} from this workspace?')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><input type="hidden" name="assignment_id" value="${escapeHtml(String(candidate._assignment_id || ''))}"><input type="hidden" name="department" value="${escapeHtml(candidate.department)}"><input type="hidden" name="role" value="${escapeHtml(candidate.role)}"><button class="small-button reject-button" type="submit">Delete role</button></form>${canDelete ? ` <form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post" style="display:inline" onsubmit="return confirm('Delete this entire user account (${escapeHtml(candidate.id)}) and all their roles permanently?')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><button class="small-button" type="submit">Delete user</button></form>` : ''}</td></tr>`;
   }
 
   return `<tr><td><form id="${formId}" action="/admin/users/${encodeURIComponent(candidate.id)}" method="post"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><input name="id" type="email" value="${escapeHtml(candidate.id)}" aria-label="Email" required></form></td><td><input form="${formId}" name="name" value="${escapeHtml(candidate.name)}" aria-label="Name" required></td><td><select form="${formId}" name="department" aria-label="Department" required><option value="">Select department</option>${departmentOptions(candidate.department)}</select></td><td><input form="${formId}" name="phone" value="${escapeHtml(candidate.phone || '')}" placeholder="WhatsApp number" aria-label="WhatsApp number"><select form="${formId}" name="role" aria-label="Role">${roleOptionsForUser(candidate.role)}</select><input form="${formId}" name="custom_role" value="${escapeHtml(customRole)}" placeholder="Custom role name" style="display:none" aria-label="Custom role"></td><td>${statusBadge}</td><td class="user-actions"><input form="${formId}" name="password" type="password" placeholder="New password (optional)" aria-label="New password"><button form="${formId}" class="small-button" type="submit" onclick="return confirm('Are you sure you want to save changes to this user?')">Save</button> ${canDelete ? `<form action="/admin/users/${encodeURIComponent(candidate.id)}/toggle" method="post" style="display:inline" onsubmit="return confirm('${isDisabled ? 'Enable this user account?' : 'Disable this user account? The user will not be able to log in.'}')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><button class="small-button" type="submit">${isDisabled ? 'Enable' : 'Disable'}</button></form> <form action="/admin/users/${encodeURIComponent(candidate.id)}/delete" method="post" style="display:inline" onsubmit="return confirm('Are you sure you want to delete this user permanently?')"><input type="hidden" name="tab" value="${escapeHtml(prefix)}"><button class="small-button reject-button" type="submit">Delete</button></form>` : '<span class="small-copy">Signed in</span>'}</td></tr>`;
@@ -1071,7 +1077,7 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
   if (!name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
   const roles = collectApprovalRoles(req.body);
-  const values = { name, capacity, min_students: 1, head_user_id: '', principal_user_id: '', maintenance_user_id: '' };
+  const values = { name, capacity, min_students: 1, head_user_id: '', principal_user_id: '', maintenance_user_id: '', electrician_user_id: '', admin_officer_user_id: '' };
   applyLegacyRoles(values, roles);
   if (supabase) {
     const { error } = await supabase.from('auditoriums').insert(values);
@@ -1090,21 +1096,30 @@ app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
   const allUsers = await getUsers();
   const roleAssignments = (await getRoleAssignments()) || [];
   const departmentRows = (await getDepartments()) || [];
-  const headById = new Map();
-  allUsers.filter((u) => u.role === 'head' || u.role === 'admin' || u.role === 'sub_admin')
-    .forEach((u) => headById.set(String(u.id).toLowerCase(), { id: u.id, name: u.name, department: u.department, role: u.role }));
-  roleAssignments.filter((a) => a.role === 'head')
-    .forEach((a) => { const key = String(a.user_id).toLowerCase(); if (!headById.has(key)) headById.set(key, { id: a.user_id, name: a.name || a.user_id, department: a.department || '', role: 'head' }); });
+  const assignableRole = new Set(['head', 'electrician', 'maintenance', 'principal', 'admin_officer']);
+  const assignableUsersById = new Map();
+  allUsers.filter((u) => assignableRole.has(u.role) || u.role === 'admin' || u.role === 'sub_admin')
+    .forEach((u) => assignableUsersById.set(String(u.id).toLowerCase(), { id: u.id, name: u.name, department: u.department, role: u.role }));
+  roleAssignments.filter((a) => assignableRole.has(a.role))
+    .forEach((a) => { const key = String(a.user_id).toLowerCase(); if (!assignableUsersById.has(key)) assignableUsersById.set(key, { id: a.user_id, name: a.name || a.user_id, department: a.department || '', role: a.role }); });
   departmentRows.filter((d) => d.head_user_id)
-    .forEach((d) => { const key = String(d.head_user_id).toLowerCase(); if (!headById.has(key)) headById.set(key, { id: d.head_user_id, name: d.head_user_id, department: d.name || '', role: 'head' }); });
-  const headUsers = [...headById.values()];
+    .forEach((d) => { const key = String(d.head_user_id).toLowerCase(); if (!assignableUsersById.has(key)) assignableUsersById.set(key, { id: d.head_user_id, name: d.head_user_id, department: d.name || '', role: 'head' }); });
+  const assignableUsers = [...assignableUsersById.values()];
+  const audAuthorityRoles = [
+    { role: 'head', label: 'Department Head' },
+    { role: 'electrician', label: 'Electrician' },
+    { role: 'maintenance', label: 'Maintenance' },
+    { role: 'principal', label: 'Principal' },
+    { role: 'admin_officer', label: 'Admin Officer' }
+  ];
   let stageCount = 4;
   auditoriums.forEach((a) => { const c = approvalRoles(a).length; if (c > stageCount) stageCount = c; });
   const stageSelect = (selected, nameAttr) => `<select name="${nameAttr}">${['none', 'head', 'electrician', 'principal', 'maintenance', 'chairman', 'admin_officer', 'higher_authority', 'purchase_officer', 'work_done', 'department_user', 'sub_admin', 'admin'].map((role) => `<option value="${role}"${role === (selected || 'none') ? ' selected' : ''}>${role === 'none' ? '— None' : escapeHtml(roleNames[role] || role)}</option>`).join('')}</select>`;
-  const headUserSelect = (selectedId, nameAttr) => {
-    const options = headUsers.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selectedId ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.department)})</option>`).join('');
-    const preserved = selectedId && !headUsers.some((u) => u.id === selectedId) ? `<option value="${escapeHtml(selectedId)}" selected>${escapeHtml(selectedId)}</option>` : '';
-    return `<select name="${nameAttr}" style="min-width:180px"><option value="">— Select department head —</option>${preserved}${options}</select>`;
+  const roleUserSelect = (role, selectedId, nameAttr, placeholder) => {
+    const pool = assignableUsers.filter((u) => u.role === role || u.role === 'admin' || u.role === 'sub_admin');
+    const options = pool.map((u) => `<option value="${escapeHtml(u.id)}"${u.id === selectedId ? ' selected' : ''}>${escapeHtml(u.name)} (${escapeHtml(u.department)})</option>`).join('');
+    const preserved = selectedId && !pool.some((u) => u.id === selectedId) ? `<option value="${escapeHtml(selectedId)}" selected>${escapeHtml(selectedId)}</option>` : '';
+    return `<select name="${nameAttr}" style="min-width:180px"><option value="">— ${placeholder} —</option>${preserved}${options}</select>`;
   };
   const stageHeaders = (() => {
     let html = '';
@@ -1120,8 +1135,11 @@ app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
     for (let i = 0; i < stageCount; i++) cells += `<td class="stage-cell">${stageSelect(stages[i], `approval_${i + 1}_${ri}`)}</td>`;
     return `<tr><input type="hidden" name="id[]" value="${escapeHtml(auditorium.id)}"><td>${escapeHtml(auditorium.id)}</td><td>${auditorium.is_locked ? `<strong>${auditoriumLabel(auditorium)}</strong>` : `<input name="name[]" value="${escapeHtml(auditorium.name)}" required>`}${cells}<td class="actions-cell">${actionButtons(auditorium)}</td></tr>`;
   }).join('');
-  const headUserRows = auditoriums.map((auditorium, ri) => `<tr><td><strong>${escapeHtml(auditorium.name)}</strong></td><td>${headUserSelect(auditorium.head_user_id, `head_user_id_${ri}`)}<input type="hidden" name="aud_id[]" value="${escapeHtml(auditorium.id)}"></td></tr>`).join('');
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Manage<br><em>rooms</em></h1></div><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Set a department head for each auditorium. When a request comes in for that room, only the assigned head can approve step 1. If no head is set, the requesting department's head will approve instead.</p></section><section class="table-wrap head-config"><h3>Auditorium-wise department heads</h3><form id="head-form" action="/admin/auditoriums/heads" method="post"><table><thead><tr><th>Auditorium</th><th>Department Head (assigned to this auditorium)</th></tr></thead><tbody>${headUserRows}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save department heads</button></div></form></section><div class="admin-tools"><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button></div><section class="table-wrap"><h3>Existing rooms</h3><form id="row-form" action="/admin/auditoriums/manage" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><table><thead><tr><th>Id</th><th>Name</th>${stageHeaders}<th style="width:220px">Actions</th></tr></thead><tbody>${rowForms}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save all changes</button></div></form></section><section class="table-wrap"><h3>Add a new room</h3><form action="/admin/auditoriums" method="post"><table><thead><tr><th>Name</th>${stageHeaders}</tr></thead><tbody><tr>${`<td><input name="name" placeholder="New room name" required></td>${Array.from({ length: stageCount }, (_, i) => `<td class="stage-cell">${stageSelect(i === 0 ? 'head' : i === 1 ? 'electrician' : i === 2 ? 'principal' : 'maintenance', `approval_${i + 1}`)}</td>`).join('')}`}</tr></tbody></table><div class="admin-tools"><button class="small-button" type="submit">Add room</button></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}var roleVals=['none','head','electrician','principal','maintenance','chairman','admin_officer','higher_authority','purchase_officer','work_done','department_user','sub_admin','admin'];function makeSelect(name){var h='<select name="'+name+'">'+roleVals.map(function(r){return '<option value="'+r+'">'+(r==='none'?'— None':r)+'</option>';}).join('')+'</select>';return h;}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function stageName(col,row){return 'approval_'+(col+1)+'_'+row;}function nameSelectsInRow(tr){Array.prototype.slice.call(tr.querySelectorAll('td.stage-cell select')).forEach(function(sel,ci){sel.name=stageName(ci,rowIndexOf(tr));});}function addStageColumn(){var tbody=document.querySelector('#row-form tbody');var theadTr=document.querySelector('#row-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);Array.prototype.slice.call(tbody.rows).forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=makeSelect(stageName(currentStages-1,rowIndexOf(tr)));tr.insertBefore(td,tr.cells[tr.cells.length-2]);nameSelectsInRow(tr);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);Array.prototype.slice.call(document.querySelectorAll('#row-form tbody tr')).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;document.getElementById('stage_count').value=currentStages;}</script></body></html>`);
+  const headUserRows = auditoriums.map((auditorium, ri) => {
+    const selectCells = audAuthorityRoles.map(({ role, label }) => `<td>${roleUserSelect(role, auditorium[`${role}_user_id`], `${role}_user_id_${ri}`, label)}</td>`).join('');
+    return `<tr><td><strong>${escapeHtml(auditorium.name)}</strong></td>${selectCells}<td><input type="hidden" name="aud_id[]" value="${escapeHtml(auditorium.id)}"></td></tr>`;
+  }).join('');
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Manage auditoriums</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Manage<br><em>rooms</em></h1></div><a class="page-nav" href="/admin">Back to admin</a></header>${adminNavBar('/admin/auditoriums/manage', req.session.user)}<section class="panel-intro"><p class="eyebrow">Admin only</p><h2>Room options and approvals.</h2><p class="lede">Assign a department head, electrician, maintenance officer, principal and admin officer for each auditorium. When a request comes in for that room, only the assigned person for the current approval step can approve it. If none is assigned, anyone holding that role can approve instead.</p></section><section class="table-wrap head-config"><h3>Auditorium-wise department heads</h3><form id="head-form" action="/admin/auditoriums/heads" method="post"><table><thead><tr><th>Auditorium</th>${audAuthorityRoles.map(({ label }) => `<th>${escapeHtml(label)}</th>`).join('')}</tr></thead><tbody>${headUserRows}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save auditorium authorities</button></div></form></section><div class="admin-tools"><button class="small-button" type="button" onclick="addStageColumn()">+ Add approval column</button></div><section class="table-wrap"><h3>Existing rooms</h3><form id="row-form" action="/admin/auditoriums/manage" method="post"><input name="stage_count" id="stage_count" type="hidden" value="${stageCount}"><table><thead><tr><th>Id</th><th>Name</th>${stageHeaders}<th style="width:220px">Actions</th></tr></thead><tbody>${rowForms}</tbody></table><div class="admin-tools"><button class="small-button" type="submit">Save all changes</button></div></form></section><section class="table-wrap"><h3>Add a new room</h3><form action="/admin/auditoriums" method="post"><table><thead><tr><th>Name</th>${stageHeaders}</tr></thead><tbody><tr>${`<td><input name="name" placeholder="New room name" required></td>${Array.from({ length: stageCount }, (_, i) => `<td class="stage-cell">${stageSelect(i === 0 ? 'head' : i === 1 ? 'electrician' : i === 2 ? 'principal' : 'maintenance', `approval_${i + 1}`)}</td>`).join('')}`}</tr></tbody></table><div class="admin-tools"><button class="small-button" type="submit">Add room</button></div></form></section></main><script>var currentStages=${stageCount};function ordinal(n){return n===1?'1st':n===2?'2nd':n===3?'3rd':n+'th';}var roleVals=['none','head','electrician','principal','maintenance','chairman','admin_officer','higher_authority','purchase_officer','work_done','department_user','sub_admin','admin'];function makeSelect(name){var h='<select name="'+name+'">'+roleVals.map(function(r){return '<option value="'+r+'">'+(r==='none'?'— None':r)+'</option>';}).join('')+'</select>';return h;}function rowIndexOf(tr){return Array.prototype.indexOf.call(tr.parentElement.rows,tr);}function stageName(col,row){return 'approval_'+(col+1)+'_'+row;}function nameSelectsInRow(tr){Array.prototype.slice.call(tr.querySelectorAll('td.stage-cell select')).forEach(function(sel,ci){sel.name=stageName(ci,rowIndexOf(tr));});}function addStageColumn(){var tbody=document.querySelector('#row-form tbody');var theadTr=document.querySelector('#row-form thead tr');currentStages+=1;var th=document.createElement('th');th.className='stage-head';th.innerHTML='<span class="stage-label"></span> <button class="col-del" type="button" onclick="removeStageColumn(this)">×</button>';th.querySelector('.stage-label').textContent=ordinal(currentStages)+' Approval';theadTr.insertBefore(th,theadTr.cells[theadTr.cells.length-2]);Array.prototype.slice.call(tbody.rows).forEach(function(tr){var td=document.createElement('td');td.className='stage-cell';td.innerHTML=makeSelect(stageName(currentStages-1,rowIndexOf(tr)));tr.insertBefore(td,tr.cells[tr.cells.length-2]);nameSelectsInRow(tr);});document.getElementById('stage_count').value=currentStages;}function removeStageColumn(btn){if(currentStages<=1){return;}var th=btn.closest('th');var theadTr=th.parentElement;var idx=Array.prototype.indexOf.call(theadTr.cells,th);theadTr.removeChild(th);Array.prototype.slice.call(document.querySelectorAll('#row-form tbody tr')).forEach(function(tr){tr.removeChild(tr.cells[idx]);});currentStages-=1;document.getElementById('stage_count').value=currentStages;}</script></body></html>`);
 });
 
 app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
@@ -1141,7 +1159,7 @@ app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
       }
       while (roles.length && roles[roles.length - 1] === 'none') roles.pop();
       if (!roles.length) roles.push('head');
-      const values = { name: String(names[ri] || current.name).trim(), min_students: current.min_students || 1, capacity: current.capacity || 300, head_user_id: current.head_user_id || '', principal_user_id: current.principal_user_id || '', maintenance_user_id: current.maintenance_user_id || '' };
+      const values = { name: String(names[ri] || current.name).trim(), min_students: current.min_students || 1, capacity: current.capacity || 300, head_user_id: current.head_user_id || '', principal_user_id: current.principal_user_id || '', maintenance_user_id: current.maintenance_user_id || '', electrician_user_id: current.electrician_user_id || '', admin_officer_user_id: current.admin_officer_user_id || '' };
       applyLegacyRoles(values, roles);
       if (supabase) {
         const { error } = await supabase.from('auditoriums').update(values).eq('id', String(id));
@@ -1159,15 +1177,22 @@ app.post('/admin/auditoriums/manage', requireLogin, async (req, res) => {
 app.post('/admin/auditoriums/heads', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   const audIds = Array.isArray(req.body.aud_id) ? req.body.aud_id : [req.body.aud_id];
+  const authorityRoles = ['head', 'electrician', 'maintenance', 'principal', 'admin_officer'];
+  const collectAuthority = (ri) => {
+    const values = {};
+    authorityRoles.forEach((role) => { values[`${role}_user_id`] = String(req.body[`${role}_user_id_${ri}`] || '').trim() || ''; });
+    return values;
+  };
   let columnMissing = false;
   try {
     for (let ri = 0; ri < audIds.length; ri++) {
       const id = audIds[ri];
-      const headUserId = String(req.body[`head_user_id_${ri}`] || '').trim() || '';
+      const values = collectAuthority(ri);
       if (supabase) {
-        const { error } = await supabase.from('auditoriums').update({ head_user_id: headUserId }).eq('id', String(id));
+        const { error } = await supabase.from('auditoriums').update(values).eq('id', String(id));
         if (error) {
-          if (error.code === 'PGRST204' || (error.message && error.message.includes('head_user_id'))) {
+          const missingColumn = authorityRoles.find((role) => error.message && error.message.includes(`${role}_user_id`));
+          if (error.code === 'PGRST204' || missingColumn) {
             columnMissing = true;
           } else {
             throw new Error(error.message);
@@ -1175,14 +1200,14 @@ app.post('/admin/auditoriums/heads', requireLogin, async (req, res) => {
         }
       } else {
         const local = localAuditoriums.find((a) => String(a.id) === String(id));
-        if (local) local.head_user_id = headUserId;
+        if (local) Object.assign(local, values);
       }
     }
   } catch (e) {
     return res.status(500).send(e.message);
   }
   if (columnMissing) {
-    return res.redirect('/admin/auditoriums/manage?msg=' + encodeURIComponent('Column head_user_id is missing. Run migrate-head-user-id.sql in Supabase SQL Editor, then try again.'));
+    return res.redirect('/admin/auditoriums/manage?msg=' + encodeURIComponent('One or more authority columns are missing. Run migrate-auditorium-approvals.sql in Supabase SQL Editor, then try again.'));
   }
   res.redirect('/admin/auditoriums/manage');
 });
@@ -1194,7 +1219,7 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   if (current.is_locked) return res.status(409).send('Unlock the auditorium before editing it.');
   const capacity = Number(req.body.capacity);
   const minStudents = Number(req.body.min_students);
-  const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, head_user_id: req.body.head_user_id || '', principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '' };
+  const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, head_user_id: req.body.head_user_id || '', principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '', electrician_user_id: req.body.electrician_user_id || '', admin_officer_user_id: req.body.admin_officer_user_id || '' };
   if (!values.name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
   if (!Number.isInteger(minStudents) || minStudents < 1) return res.status(400).send('Minimum students must be a positive whole number.');
@@ -1532,7 +1557,7 @@ app.post('/admin/requests/delete-all', requireLogin, async (req, res) => {
 function requestRow(request, user, auditoriumConfigs) {
   const status = requestStatus(request, auditoriumConfigs);
   const auditorium = auditoriumConfigs.find((a) => a.name === request.auditorium) || {};
-  const headInfo = auditorium.head_user_id ? `<small style="color:var(--orange);font-size:11px;display:block">Head: ${escapeHtml(auditorium.head_user_id)}</small>` : '';
+  const headInfo = auditorium.head_user_id ? `<small style="color:var(--orange);font-size:11px;display:block">Head: <span class="email">${escapeHtml(auditorium.head_user_id)}</span></small>` : '';
     if (user.role === 'admin' || user.role === 'sub_admin') {
     const requesterLabel = request.requester_type === 'faculty' ? 'Faculty' : 'Student';
     const requesterDetail = escapeHtml(request.requester_name || request.faculty_name || request.requester_id || '');
@@ -1549,9 +1574,11 @@ function requestStatus(request, auditoriumConfigs) {
   if (!transition) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
   const stepRoleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance officer', chairman: 'Chairman', admin_officer: 'Admin officer', higher_authority: 'Higher authority', purchase_officer: 'Purchase officer', work_done: 'Work Inspector', department_user: 'Department staff' };
   let pendingLabel = stepRoleNames[transition.role] || moduleRoleLabel(transition.role) || transition.role;
-  if (transition.role === 'head' && auditorium.head_user_id) pendingLabel += ` (${escapeHtml(auditorium.head_user_id)})`;
-  if (transition.role === 'principal' && auditorium.principal_user_id) pendingLabel += ` (${escapeHtml(auditorium.principal_user_id)})`;
-  if (transition.role === 'maintenance' && auditorium.maintenance_user_id) pendingLabel += ` (${escapeHtml(auditorium.maintenance_user_id)})`;
+  if (transition.role === 'head' && auditorium.head_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.head_user_id)}</span>)`;
+  if (transition.role === 'principal' && auditorium.principal_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.principal_user_id)}</span>)`;
+  if (transition.role === 'maintenance' && auditorium.maintenance_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.maintenance_user_id)}</span>)`;
+  if (transition.role === 'electrician' && auditorium.electrician_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.electrician_user_id)}</span>)`;
+  if (transition.role === 'admin_officer' && auditorium.admin_officer_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.admin_officer_user_id)}</span>)`;
   return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span><small>Pending: ${pendingLabel}</small>`;
 }
  
@@ -1606,6 +1633,8 @@ function approvalAction(request, user, auditoriumConfigs) {
   }
   if (transition.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return '<span class="muted">Waiting</span>';
   if (transition.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return '<span class="muted">Waiting</span>';
+  if (transition.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return '<span class="muted">Waiting</span>';
+  if (transition.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return '<span class="muted">Waiting</span>';
   return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
 }
 
@@ -1990,7 +2019,7 @@ app.get('/admin/workflows', requireLogin, async (req, res) => {
   const bandHtml = (band) => {
     const bandSteps = steps.filter((step) => step.band_id === band.id).sort((a, b) => a.step_no - b.step_no);
     const addStepForm = `<form class="wf-add-step" action="/admin/workflows/band/${band.id}/step" method="post"><div class="wf-inline"><select name="role_id" required>${workflowRoleOptions('')}</select><button class="small-button" type="submit">+ Step</button></div></form>`;
-    const stepRows = bandSteps.map((step) => `<div class="wf-step"><span><b>${step.step_no}.</b> ${escapeHtml(moduleRoleLabel(step.role_id))}${step.approver_user_id ? ` <em class="wf-person">→ ${escapeHtml(step.approver_user_id)}</em>` : ''}</span><div class="wf-step-actions"><form class="wf-inline wf-assign" action="/admin/workflows/step/${step.id}/approver" method="post"><select name="approver_user_id" aria-label="Assign specific person (optional)">${approverUserOptions(step)}</select><button class="small-button" type="submit">Assign</button></form><form action="/admin/workflows/step/${step.id}/delete" method="post"><button class="small-button reject-button" type="submit">×</button></form></div></div>`).join('') || '<div class="wf-empty">No steps. Add a step below.</div>';
+    const stepRows = bandSteps.map((step) => `<div class="wf-step"><span><b>${step.step_no}.</b> ${escapeHtml(moduleRoleLabel(step.role_id))}${step.approver_user_id ? ` <em class="wf-person">→ <span class="email">${escapeHtml(step.approver_user_id ?? '')}</span></em>` : ''}</span><div class="wf-step-actions"><form class="wf-inline wf-assign" action="/admin/workflows/step/${step.id}/approver" method="post"><select name="approver_user_id" aria-label="Assign specific person (optional)">${approverUserOptions(step)}</select><button class="small-button" type="submit">Assign</button></form><form action="/admin/workflows/step/${step.id}/delete" method="post"><button class="small-button reject-button" type="submit">×</button></form></div></div>`).join('') || '<div class="wf-empty">No steps. Add a step below.</div>';
     return `<div class="wf-band"><div class="wf-band-head"><strong>${escapeHtml(band.label || bandAmountLabel(band))}</strong><span class="wf-band-range">${escapeHtml(bandAmountLabel(band))} · order ${escapeHtml(band.sort_order)}</span><form action="/admin/workflows/band/${band.id}/delete" method="post"><button class="small-button reject-button" type="submit">Delete band</button></form></div>${stepRows}${addStepForm}</div>`;
   };
 
@@ -2222,6 +2251,8 @@ app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
   if (user.role !== 'admin' && user.role !== transition.role && !(user.role === 'head' && transition.role === 'head' && (user.departments || [user.department]).includes(request.department))) return res.status(403).send('This request is waiting for another approver.');
   if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
   if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
+  if (user.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return res.status(403).send('This request is assigned to another electrician.');
+  if (user.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return res.status(403).send('This request is assigned to another admin officer.');
   if (supabase) {
     const { error } = await supabase.from('requests').update({ status: transition.status }).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -2253,6 +2284,8 @@ app.post('/admin/requests/:id/reject', requireLogin, async (req, res) => {
   if (!canReject) return res.status(403).send('This request is waiting for another approver.');
   if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
   if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
+  if (user.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return res.status(403).send('This request is assigned to another electrician.');
+  if (user.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return res.status(403).send('This request is assigned to another admin officer.');
   if (supabase) {
     const { error } = await supabase.from('requests').update({ status: 'rejected', rejection_remarks: remarks }).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -2620,7 +2653,7 @@ app.get('/admin/car-requests', requireLogin, async (req, res) => {
     const rejectForm = request.status === 'pending'
       ? `<form class="request-actions reject-form" action="/admin/car-requests/${request.id}/reject" method="post"><input name="remarks" placeholder="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`
       : '';
-    return `<tr><td>${escapeHtml(request.department)}</td><td>${escapeHtml(request.purpose)}<small>${escapeHtml(request.pickup_location)} to ${escapeHtml(request.destination)}</small></td><td>${escapeHtml(request.travel_date)}<small>${escapeHtml(request.pickup_time || '')}${request.return_time ? ` - ${escapeHtml(request.return_time)}` : ''}</small></td><td>${escapeHtml(request.passenger_count)}</td><td>${escapeHtml(request.requester_name)}<small>${escapeHtml(request.requester_mobile)}<br>${escapeHtml(request.requester_email)}</small></td><td><span class="status ${request.status === 'approved' ? 'approved' : request.status === 'rejected' ? 'rejected' : 'pending'}">${escapeHtml(request.status)}</span>${assigned}</td><td>${approveForm}${rejectForm}${request.status === 'pending' ? '' : escapeHtml(request.rejection_remarks || '')}</td></tr>`;
+    return `<tr><td>${escapeHtml(request.department)}</td><td>${escapeHtml(request.purpose)}<small>${escapeHtml(request.pickup_location)} to ${escapeHtml(request.destination)}</small></td><td>${escapeHtml(request.travel_date)}<small>${escapeHtml(request.pickup_time || '')}${request.return_time ? ` - ${escapeHtml(request.return_time)}` : ''}</small></td><td>${escapeHtml(request.passenger_count)}</td><td>${escapeHtml(request.requester_name)}<small>${escapeHtml(request.requester_mobile)}<br><span class="email">${escapeHtml(request.requester_email)}</span></small></td><td><span class="status ${request.status === 'approved' ? 'approved' : request.status === 'rejected' ? 'rejected' : 'pending'}">${escapeHtml(request.status)}</span>${assigned}</td><td>${approveForm}${rejectForm}${request.status === 'pending' ? '' : escapeHtml(request.rejection_remarks || '')}</td></tr>`;
   }).join('') : '<tr><td colspan="7">No car requests yet.</td></tr>';
 
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Car request approvals</title><link rel="stylesheet" href="/styles.css"><style>.car-assign{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}.car-assign select,.reject-form input{width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--line);background:transparent;font:12px Arial,sans-serif}.assigned-detail{display:block;margin-top:8px;font:12px Arial,sans-serif;color:var(--ink)}.assigned-detail small{display:block;color:var(--muted);margin-top:2px}</style></head><body><main class="shell panel"><header class="masthead"><div><p class="kicker">${escapeHtml(req.session.user.role)}</p><h1>Car request<br><em>approval</em></h1></div><div class="admin-tools" style="display:flex;gap:10px;align-items:center"><a class="page-nav" href="/admin/car-fleet">Fleet register ↗</a><a class="page-nav" href="/admin/pages">Back to admin pages</a></div></header><section class="panel-intro"><p class="eyebrow">Section 04</p><h2>Car requests.</h2><p class="lede">Review official vehicle requests. On approval, choose the assigned driver and car.</p>${noFleetAlert}</section><div class="table-wrap"><table><thead><tr><th>Department</th><th>Travel</th><th>Date & time</th><th>Passengers</th><th>Requester</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></main></body></html>`);
@@ -2808,7 +2841,7 @@ app.get('/admin/maintenance', requireLogin, async (req, res) => {
       <td>#${escapeHtml(req.id)}</td>
       <td>${categoryIcons[req.category] || '🔧'} ${escapeHtml(req.location)}<small>${escapeHtml(categoryLabels[req.category] || req.category)}</small></td>
       <td><span class="priority-badge" style="background:${priorityBg[req.priority] || '#f0f0f0'};color:${priorityColors[req.priority] || 'var(--ink)'}">${escapeHtml(req.priority.toUpperCase())}</span></td>
-      <td>${escapeHtml(req.description)}<small>${escapeHtml(req.reporter_name)} · ${escapeHtml(req.department)}</small><small>${escapeHtml(req.reporter_mobile)} · ${escapeHtml(req.reporter_email)}</small></td>
+      <td>${escapeHtml(req.description)}<small>${escapeHtml(req.reporter_name)} · ${escapeHtml(req.department)}</small><small>${escapeHtml(req.reporter_mobile)} · <span class="email">${escapeHtml(req.reporter_email)}</span></small></td>
       <td>${createdDate}<small>${createdTime}</small></td>
       <td>${maintStatusDisplay(req)}</td>
       <td>${maintApprovalAction(req, user)}</td>
@@ -3733,7 +3766,7 @@ app.get('/admin/purchase', requireLogin, async (req, res) => {
       <td>${itemDetails}<small>Total: ${escapeHtml(req.quantity)} × ₹${escapeHtml(req.unit_price)} = ₹${totalPrice}</small></td>
       <td>${escapeHtml(req.description)}<small>Vendor: ${escapeHtml(req.vendor || 'N/A')}</small></td>
       <td><span class="priority-badge" style="background:${priorityBg[req.priority] || '#f0f0f0'};color:${priorityColors[req.priority] || 'var(--ink)'}">${escapeHtml(req.priority.toUpperCase())}</span></td>
-      <td>${escapeHtml(req.requester_name)}<small>${escapeHtml(req.requester_mobile)}</small><small>${escapeHtml(req.requester_email)}</small></td>
+      <td>${escapeHtml(req.requester_name)}<small>${escapeHtml(req.requester_mobile)}</small><small><span class="email">${escapeHtml(req.requester_email)}</span></small></td>
       <td>${createdDate}<small>${createdTime}</small></td>
       <td>${await purchaseStatusDisplay(req, pipeline)} <a class="page-nav" href="/admin/purchase/${req.id}/document" target="_blank">Approval sheet ↗</a></td>
       <td>${await purchaseApprovalAction(req, pipeline)}</td>
@@ -4325,7 +4358,7 @@ app.get('/admin/fees', requireLogin, async (req, res) => {
   const students = await getStudentsList();
   const payments = await getBankPayments();
   
-  const studentRows = students.length ? students.map((s) => `<tr><td>${escapeHtml(s.enrollment_no)}</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.department)}</td><td>₹${Number(s.total_fees || 0).toFixed(2)}</td><td>${escapeHtml(s.email || '-')}</td></tr>`).join('') : '<tr><td colspan="5">No students uploaded yet.</td></tr>';
+  const studentRows = students.length ? students.map((s) => `<tr><td>${escapeHtml(s.enrollment_no)}</td><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.department)}</td><td>₹${Number(s.total_fees || 0).toFixed(2)}</td><td><span class="email">${escapeHtml(s.email || '-')}</span></td></tr>`).join('') : '<tr><td colspan="5">No students uploaded yet.</td></tr>';
   
   const paymentRows = payments.slice(0, 20).map((p) => `<tr><td>${escapeHtml(p.enrollment_no || '-')}</td><td>${escapeHtml(p.student_name || '-')}</td><td>₹${Number(p.amount || 0).toFixed(2)}</td><td>${escapeHtml(p.payment_date)}</td><td>${escapeHtml(p.bank_name || '-')}</td></tr>`).join('');
   

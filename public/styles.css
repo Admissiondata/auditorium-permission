@@ -234,6 +234,15 @@ textarea {
   min-height: 100px;
 }
 
+/* --- Email addresses: keep the original case (not uppercased) --- */
+input[type="email"],
+input[name*="email"],
+input[name="user_id"],
+input[name="sender_email"],
+.email {
+  text-transform: none;
+}
+
 /* --- Tables --- */
 .table-wrap {
   overflow-x: auto;
