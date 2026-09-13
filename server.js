@@ -346,7 +346,7 @@ async function approverPhone(role, request, auditorium) {
 async function notifyPendingApprover(request, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
-  if (!transition) return;
+  if (!transition || !transition.role) return;
   const recipient = await approverEmail(transition.role, request, auditorium);
   if (recipient) {
     await createNotification({
@@ -1478,6 +1478,26 @@ app.post('/admin/departments/:id/delete', requireLogin, async (req, res) => {
   res.redirect('/admin/departments');
 });
 
+app.post('/admin/requests/delete-all', requireLogin, async (req, res) => {
+  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
+  if (supabase) {
+    const { requests: reqErr } = await supabase.from('requests').delete().neq('id', 0);
+    if (reqErr) return res.status(500).send(reqErr.message);
+    const { maintenance_requests: mErr } = await supabase.from('maintenance_requests').delete().neq('id', 0);
+    if (mErr) return res.status(500).send(mErr.message);
+    const { purchase_requests: pErr } = await supabase.from('purchase_requests').delete().neq('id', 0);
+    if (pErr) return res.status(500).send(pErr.message);
+    const { car_requests: cErr } = await supabase.from('car_requests').delete().neq('id', 0);
+    if (cErr) return res.status(500).send(cErr.message);
+  } else {
+    requests.length = 0;
+    localMaintenanceRequests.length = 0;
+    localPurchaseRequests.length = 0;
+    localCarRequests.length = 0;
+  }
+  res.redirect('/admin');
+});
+
 app.get('/admin/requests/:id/edit', requireLogin, async (req, res) => {
   if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
   let request = requests.find((candidate) => String(candidate.id) === req.params.id);
@@ -1534,26 +1554,6 @@ app.post('/admin/requests/:id/delete', requireLogin, async (req, res) => {
   res.redirect('/admin');
 });
 
-app.post('/admin/requests/delete-all', requireLogin, async (req, res) => {
-  if (!isAdmin(req.session.user)) return res.status(403).send('Admin access required.');
-  if (supabase) {
-    const { requests: reqErr } = await supabase.from('requests').delete().neq('id', 0);
-    if (reqErr) return res.status(500).send(reqErr.message);
-    const { maintenance_requests: mErr } = await supabase.from('maintenance_requests').delete().neq('id', 0);
-    if (mErr) return res.status(500).send(mErr.message);
-    const { purchase_requests: pErr } = await supabase.from('purchase_requests').delete().neq('id', 0);
-    if (pErr) return res.status(500).send(pErr.message);
-    const { car_requests: cErr } = await supabase.from('car_requests').delete().neq('id', 0);
-    if (cErr) return res.status(500).send(cErr.message);
-  } else {
-    requests.length = 0;
-    localMaintenanceRequests.length = 0;
-    localPurchaseRequests.length = 0;
-    localCarRequests.length = 0;
-  }
-  res.redirect('/admin');
-});
-
 function requestRow(request, user, auditoriumConfigs) {
   const status = requestStatus(request, auditoriumConfigs);
   const auditorium = auditoriumConfigs.find((a) => a.name === request.auditorium) || {};
@@ -1571,7 +1571,7 @@ function requestRow(request, user, auditoriumConfigs) {
 function requestStatus(request, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
-  if (!transition) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
+  if (!transition || !transition.role) return `<span class="status ${escapeHtml(request.status)}">${escapeHtml(request.status.replaceAll('_', ' '))}</span>${request.rejection_remarks ? `<small>Remarks: ${escapeHtml(request.rejection_remarks)}</small>` : ''}`;
   const stepRoleNames = { head: 'Department head', electrician: 'Electrician', principal: 'Principal', maintenance: 'Maintenance officer', chairman: 'Chairman', admin_officer: 'Admin officer', higher_authority: 'Higher authority', purchase_officer: 'Purchase officer', work_done: 'Work Inspector', department_user: 'Department staff' };
   let pendingLabel = stepRoleNames[transition.role] || moduleRoleLabel(transition.role) || transition.role;
   if (transition.role === 'head' && auditorium.head_user_id) pendingLabel += ` (<span class="email">${escapeHtml(auditorium.head_user_id)}</span>)`;
@@ -1621,7 +1621,7 @@ function auditoriumIsBooked(requestsToCheck, auditorium, slots) {
 function approvalAction(request, user, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((candidate) => candidate.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
-  if (!transition) return '<span class="muted">Waiting</span>';
+  if (!transition || !transition.role) return '<span class="muted">Waiting</span>';
   if (user.role === 'admin') {
     return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
   }
@@ -1673,14 +1673,25 @@ function approvalTransition(request, auditorium) {
   const roles = approvalRoles(auditorium);
   const statuses = ['pending', 'first_approved', 'second_approved', 'third_approved', 'fourth_approved', 'approved'];
   const stageByStatus = { pending: 0, first_approved: 1, second_approved: 2, third_approved: 3, fourth_approved: 4 };
+  const stageSkipped = (role) => role === 'none' || (role === 'head' && !(auditorium && auditorium.head_user_id));
   let stage = stageByStatus[request.status];
   if (stage === undefined) return null;
-  while (stage < roles.length && roles[stage] === 'none') stage += 1;
-  if (stage >= roles.length) return null;
+  while (stage < roles.length && stageSkipped(roles[stage])) stage += 1;
+  if (stage >= roles.length) return { role: null, status: 'approved' };
   let nextStage = stage + 1;
-  while (nextStage < roles.length && roles[nextStage] === 'none') nextStage += 1;
+  while (nextStage < roles.length && stageSkipped(roles[nextStage])) nextStage += 1;
   const nextStatus = nextStage >= roles.length ? 'approved' : (statuses[nextStage] || 'approved');
   return { role: roles[stage], status: nextStatus };
+}
+
+function applySkippedStages(request, auditorium) {
+  let status = request.status;
+  for (let i = 0; i < 12; i++) {
+    const transition = approvalTransition({ ...request, status }, auditorium);
+    if (!transition || transition.role || transition.status === status) return status;
+    status = transition.status;
+  }
+  return status;
 }
 
 app.post('/admin/users', requireLogin, async (req, res) => {
@@ -2247,21 +2258,27 @@ app.post('/admin/requests/:id/approve', requireLogin, async (req, res) => {
   const auditorium = (await getAuditoriumConfigs()).find((candidate) => candidate.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
   const user = req.session.user;
-  if (!transition) return res.status(409).send('This request has no remaining approval stage.');
-  if (user.role !== 'admin' && user.role !== transition.role && !(user.role === 'head' && transition.role === 'head' && (user.departments || [user.department]).includes(request.department))) return res.status(403).send('This request is waiting for another approver.');
+  if (!transition || !transition.role) return res.status(409).send('This request has no remaining approval stage.');
+  if (user.role !== 'admin' && user.role !== transition.role) return res.status(403).send('This request is waiting for another approver.');
+  if (user.role === 'head') {
+    const auditoriumHead = auditorium.head_user_id;
+    if (auditoriumHead && user.id !== auditoriumHead) return res.status(403).send('This request is assigned to another department head.');
+    if (!auditoriumHead && !(user.departments || [user.department]).includes(request.department)) return res.status(403).send('This request is assigned to another department head.');
+  }
   if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
   if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
   if (user.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return res.status(403).send('This request is assigned to another electrician.');
   if (user.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return res.status(403).send('This request is assigned to another admin officer.');
+  const nextStatus = applySkippedStages({ ...request, status: transition.status }, auditorium);
   if (supabase) {
-    const { error } = await supabase.from('requests').update({ status: transition.status }).eq('id', req.params.id);
+    const { error } = await supabase.from('requests').update({ status: nextStatus }).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
   } else {
-    request.status = transition.status;
+    request.status = nextStatus;
   }
-  await notifyPendingApprover({ ...request, status: transition.status }, await getAuditoriumConfigs());
-  await notifyRequester({ ...request, status: transition.status }, transition.status);
-  if (transition.status === 'approved') {
+  await notifyPendingApprover({ ...request, status: nextStatus }, await getAuditoriumConfigs());
+  await notifyRequester({ ...request, status: nextStatus }, nextStatus);
+  if (nextStatus === 'approved') {
     await notifyFinalReport({ ...request, status: 'approved' }, await getAuditoriumConfigs());
   }
   res.redirect('/admin');
@@ -2280,7 +2297,12 @@ app.post('/admin/requests/:id/reject', requireLogin, async (req, res) => {
   const user = req.session.user;
   const remarks = String(req.body.remarks || '').trim();
   if (!remarks) return res.status(400).send('Rejection remarks are required.');
-  const canReject = user.role === 'admin' || (transition && user.role === transition.role && (user.role !== 'head' || (user.departments || [user.department]).includes(request.department)));
+  const canReject = user.role === 'admin' || (transition && transition.role && user.role === transition.role);
+  if (canReject && user.role === 'head') {
+    const auditoriumHead = auditorium.head_user_id;
+    if (auditoriumHead && user.id !== auditoriumHead) return res.status(403).send('This request is assigned to another department head.');
+    if (!auditoriumHead && !(user.departments || [user.department]).includes(request.department)) return res.status(403).send('This request is assigned to another department head.');
+  }
   if (!canReject) return res.status(403).send('This request is waiting for another approver.');
   if (user.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return res.status(403).send('This request is assigned to another principal.');
   if (user.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return res.status(403).send('This request is assigned to another maintenance officer.');
@@ -2383,6 +2405,9 @@ app.post('/requests', async (req, res) => {
     return res.redirect(`/?${details}`);
   }
 
+  const effectiveStatus = applySkippedStages(request, selectedAuditorium || {});
+  if (effectiveStatus !== request.status) request.status = effectiveStatus;
+
   if (supabase) {
     const { error } = await supabase.from('requests').insert(request);
     if (error) {
@@ -2395,7 +2420,11 @@ app.post('/requests', async (req, res) => {
     requests.unshift({ id: Date.now(), created_at: new Date().toISOString(), ...request });
   }
 
-  await notifyPendingApprover(request, await getAuditoriumConfigs());
+  const auditoriumConfigs = await getAuditoriumConfigs();
+  await notifyPendingApprover(request, auditoriumConfigs);
+  if (request.status === 'approved') {
+    await notifyFinalReport(request, auditoriumConfigs);
+  }
 
   if (mailer && request.requester_email) {
     try {
@@ -2403,7 +2432,7 @@ app.post('/requests', async (req, res) => {
         from: senderEmail,
         to: request.requester_email,
         subject: `Auditorium request received: ${request.program}`,
-        text: `Your auditorium permission request has been submitted successfully.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: Pending review\n\nYour request will go through the following approval chain:\nDepartment Head → Electrician → Principal → Maintenance\n\nYou will receive an email when your request is approved or rejected.`
+        text: `Your auditorium permission request has been submitted successfully.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: ${request.status === 'approved' ? 'Approved' : 'Pending review'}\n\n${request.status === 'approved' ? 'All configured approvals were already completed.' : 'You will receive an email when your request is approved or rejected.'}`
       });
     } catch (error) {
       console.error(`Confirmation email could not be sent to ${request.requester_email}: ${error.message}`);
