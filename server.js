@@ -9,62 +9,71 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const { createClient } = require('@supabase/supabase-js');
 
-class FileSessionStore extends session.Store {
-  constructor(options = {}) {
+class SupabaseSessionStore extends session.Store {
+  constructor() {
     super();
-    this.file = options.file || path.join(__dirname, '.sessions.json');
     this.sessions = new Map();
-    this.diskWritable = true;
-    this.loadFromDisk();
   }
-  loadFromDisk() {
-    try {
-      if (!fs.existsSync(this.file)) return;
-      const raw = fs.readFileSync(this.file, 'utf8');
-      Object.entries(JSON.parse(raw)).forEach(([sid, record]) => this.sessions.set(String(sid), record));
-      this.saveToDisk();
-    } catch (error) {
-      this.diskWritable = false;
-    }
-  }
-  saveToDisk() {
-    if (!this.diskWritable) return;
-    try {
-      const payload = JSON.stringify(Object.fromEntries(this.sessions));
-      const tempFile = `${this.file}.${process.pid}.tmp`;
-      fs.writeFileSync(tempFile, payload, { mode: 0o600 });
-      fs.renameSync(tempFile, this.file);
-    } catch (error) {
-      this.diskWritable = false;
-    }
+  static expiresOf(sessionData) {
+    return sessionData && sessionData.cookie && sessionData.cookie.expires && (sessionData.cookie.expires instanceof Date || typeof sessionData.cookie.expires === 'number' || typeof sessionData.cookie.expires === 'string')
+      ? new Date(sessionData.cookie.expires).getTime()
+      : null;
   }
   get(sid, callback) {
-    const record = this.sessions.get(String(sid));
-    if (!record) return setImmediate(() => callback(null, null));
-    if (record.expires && Date.now() > record.expires) {
-      this.destroy(sid, () => {});
-      return setImmediate(() => callback(null, null));
+    const key = String(sid);
+    const cached = this.sessions.get(key);
+    if (cached) {
+      if (cached.expires && Date.now() > cached.expires) {
+        this.destroy(key, () => {});
+        return setImmediate(() => callback(null, null));
+      }
+      return setImmediate(() => callback(null, cached.session));
     }
-    setImmediate(() => callback(null, record.session));
+    if (!supabase) return setImmediate(() => callback(null, null));
+    supabase.from('sessions').select('session_data, expires').eq('sid', key).maybeSingle().then(({ data, error }) => {
+      if (error || !data) return callback(null, null);
+      let sessionData;
+      try { sessionData = typeof data.session_data === 'string' ? JSON.parse(data.session_data) : data.session_data; } catch { sessionData = null; }
+      if (!sessionData) return callback(null, null);
+      if (data.expires && Date.now() > data.expires) {
+        this.destroy(key, () => {});
+        return callback(null, null);
+      }
+      this.sessions.set(key, { session: sessionData, expires: data.expires || null });
+      callback(null, sessionData);
+    }).catch(() => callback(null, null));
   }
   set(sid, sessionData, callback) {
-    this.sessions.set(String(sid), { session: sessionData, expires: sessionData && sessionData.cookie && (sessionData.cookie.expires instanceof Date || typeof sessionData.cookie.expires === 'number' || typeof sessionData.cookie.expires === 'string') ? new Date(sessionData.cookie.expires).getTime() : null });
-    this.saveToDisk();
-    if (callback) setImmediate(callback);
+    const key = String(sid);
+    const expires = SupabaseSessionStore.expiresOf(sessionData);
+    this.sessions.set(key, { session: sessionData, expires });
+    if (!supabase) return callback && setImmediate(callback);
+    supabase.from('sessions').upsert(
+      { sid: key, session_data: sessionData, expires },
+      { onConflict: 'sid' }
+    ).then(() => {}).catch(() => {}).finally(() => callback && setImmediate(callback));
   }
   destroy(sid, callback) {
-    this.sessions.delete(String(sid));
-    this.saveToDisk();
-    if (callback) setImmediate(() => callback(null));
+    const key = String(sid);
+    this.sessions.delete(key);
+    if (!supabase) return callback && setImmediate(() => callback(null));
+    supabase.from('sessions').delete().eq('sid', key).then(() => {}).catch(() => {}).finally(() => callback && setImmediate(() => callback(null)));
   }
   touch(sid, sessionData, callback) {
-    const record = this.sessions.get(String(sid));
+    const key = String(sid);
+    const record = this.sessions.get(key);
+    const expires = SupabaseSessionStore.expiresOf(sessionData);
     if (record) {
       record.session = sessionData;
-      record.expires = sessionData && sessionData.cookie && sessionData.cookie.expires ? new Date(sessionData.cookie.expires).getTime() : null;
+      record.expires = expires;
+    } else if (supabase) {
+      this.sessions.set(key, { session: sessionData, expires });
     }
-    this.saveToDisk();
-    if (callback) setImmediate(callback);
+    if (!supabase) return callback && setImmediate(callback);
+    supabase.from('sessions').upsert(
+      { sid: key, session_data: sessionData, expires },
+      { onConflict: 'sid' }
+    ).then(() => {}).catch(() => {}).finally(() => callback && setImmediate(callback));
   }
 }
 
@@ -278,7 +287,7 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'replace-this-session-secret',
   resave: false,
   saveUninitialized: false,
-  store: new FileSessionStore(),
+  store: new SupabaseSessionStore(),
   cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 7 * 24 * 60 * 60 * 1000 }
 }));
 app.get('/', renderRequestPage);
@@ -4547,9 +4556,13 @@ app.get('/uploads/:filename', (req, res) => {
   res.sendFile(filePath);
 });
 
-app.listen(port, () => {
-  console.log(`Auditorium permissions running at http://localhost:${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Auditorium permissions running at http://localhost:${port}`);
+  });
+}
+
+module.exports = app;
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason && reason.stack ? reason.stack : reason);
