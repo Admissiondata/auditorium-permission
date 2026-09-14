@@ -100,8 +100,32 @@ const users = [
   { id: 'authority@svitvasad.ac.in', password: 'authority123', name: 'Higher authority', role: 'higher_authority', department: 'All departments' }
 ];
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+
+async function supabaseFetchWithRetry(input, init) {
+  const attempts = 3;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+    }
+    try {
+      const resp = await fetch(input, init);
+      if (resp && (resp.status === 500 || resp.status === 502 || resp.status === 503 || resp.status === 504)) {
+        lastError = new Error('bad status ' + resp.status);
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
 const supabase = process.env.SUPABASE_URL && supabaseKey
-  ? createClient(process.env.SUPABASE_URL, supabaseKey)
+  ? createClient(process.env.SUPABASE_URL, supabaseKey, {
+      global: { fetch: supabaseFetchWithRetry }
+    })
   : null;
 const localDisabledUsers = new Set();
 
@@ -283,6 +307,7 @@ function whatsappMessageForApprover(request, transitionLabel) {
 
 app.use(express.urlencoded({ extended: true, limit: '10mb', parameterLimit: 100000 }));
 app.use(express.json({ limit: '10mb' }));
+app.set('trust proxy', 1);
 app.use(session({
   secret: process.env.SESSION_SECRET || 'replace-this-session-secret',
   resave: false,
@@ -389,18 +414,28 @@ async function notifyRequester(request, status, remarks) {
   const recipientEmail = request.requester_email || (request.requester_id && request.requester_id !== 'public' ? request.requester_id : null);
   const statusLabels = { approved: 'Approved', first_approved: 'First approval done', second_approved: 'Second approval done', third_approved: 'Third approval done', fourth_approved: 'Fourth approval done', rejected: 'Rejected' };
   const statusLabel = statusLabels[status] || status;
+  let nextApprover = '';
+  try {
+    const auditoriumConfigs = await getAuditoriumConfigs();
+    const auditorium = auditoriumConfigs.find((auditorium) => auditorium.name === request.auditorium) || {};
+    const transition = approvalTransition({ ...request, status }, auditorium);
+    if (transition && transition.role) {
+      nextApprover = `Next approval: ${moduleRoleLabel(transition.role)}`;
+    }
+  } catch (e) { console.error(`Could not determine next approver: ${e.message}`); }
+  const notificationMessage = `Your request for ${request.auditorium} on ${request.date} is ${statusLabel}.${nextApprover ? ` ${nextApprover}.` : ''}${remarks ? ` Remarks: ${remarks}` : ''}`;
   if (recipientEmail) {
     await createNotification({
       userId: recipientEmail,
       title: `Auditorium request ${statusLabel}: ${request.program}`,
-      message: `Your request for ${request.auditorium} on ${request.date} is ${statusLabel}.${remarks ? ` Remarks: ${remarks}` : ''}`,
+      message: notificationMessage,
       module: 'auditorium',
       referenceId: request.id,
       link: '/dashboard'
     });
   }
   if (request.requester_mobile) {
-    const waMsg = `SVIT Vasad – Auditorium request ${statusLabel}\n\nProgramme: ${request.program}\nDepartment: ${request.department}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || ''} - ${request.end_time || ''}\nStatus: ${statusLabel}${remarks ? `\nRemarks: ${remarks}` : ''}\n\nPlease sign in to the approval desk for details.`;
+    const waMsg = `SVIT Vasad – Auditorium request ${statusLabel}\n\nProgramme: ${request.program}\nDepartment: ${request.department}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || ''} - ${request.end_time || ''}\nStatus: ${statusLabel}${nextApprover ? `\n${nextApprover}` : ''}${remarks ? `\nRemarks: ${remarks}` : ''}\n\nPlease sign in to the approval desk for details.`;
     await sendWhatsApp(request.requester_mobile, waMsg);
   }
   if (!mailer) return;
@@ -410,7 +445,7 @@ async function notifyRequester(request, status, remarks) {
         from: senderEmail,
         to: recipientEmail,
         subject: `Auditorium request ${statusLabel}: ${request.program}`,
-        text: `Your auditorium request has been ${statusLabel}.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: ${statusLabel}\n${remarks ? `Remarks: ${remarks}\n` : ''}\nPlease sign in to the approval desk for details.`
+        text: `Your auditorium request has been ${statusLabel}.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStatus: ${statusLabel}${nextApprover ? `\n${nextApprover}` : ''}${remarks ? `\nRemarks: ${remarks}\n` : ''}\nPlease sign in to the approval desk for details.`
       });
   } catch (error) {
     console.error(`Requester email could not be sent to ${recipientEmail}: ${error.message}`);
@@ -703,7 +738,9 @@ app.get('/dashboard', requireLogin, async (req, res) => {
     try {
       if (moduleKey === 'auditorium') {
         const all = supabase ? (await supabase.from('requests').select('*')).data || [] : requests;
-        return { total: all.length, pending: all.filter((r) => r.status === 'pending').length };
+        const auditoriumConfigs = await getAuditoriumConfigs();
+        const visible = all.filter((r) => requestVisibleToUser(user, r, auditoriumConfigs));
+        return { total: visible.length, pending: visible.filter((r) => requestNeedsUserApproval(user, r, auditoriumConfigs)).length };
       }
       if (moduleKey === 'maintenance') {
         const all = supabase ? (await supabase.from('maintenance_requests').select('*')).data || [] : localMaintenanceRequests;
@@ -1014,8 +1051,7 @@ app.get('/admin', requireLogin, async (req, res) => {
     if (error) return res.status(error.code === 'PGRST205' ? 503 : 500).send(error.code === 'PGRST205' ? 'Database setup required. Run supabase/schema.sql in the Supabase SQL Editor.' : error.message);
     allRequests = data;
   }
-  const visibleRequests = isAdmin(user) || ['principal', 'maintenance', 'electrician', 'admin_officer', 'chairman', 'higher_authority', 'purchase_officer'].includes(user.role)
-    ? allRequests : allRequests.filter((request) => (user.departments || [user.department]).includes(request.department));
+  const visibleRequests = allRequests.filter((request) => requestVisibleToUser(user, request, auditoriumConfigs));
   const sortedRequests = sortPendingFirst(visibleRequests);
   const rows = sortedRequests.length ? sortedRequests.map((request) => requestRow(request, user, auditoriumConfigs)).join('') : `<tr><td colspan="${isAdmin(user) ? 9 : 5}">No requests yet.</td></tr>`;
   const visibleUsers = isAdmin(user) ? await getUsers() : [];
@@ -1023,10 +1059,11 @@ app.get('/admin', requireLogin, async (req, res) => {
   const auditoriums = isAdmin(user) ? auditoriumConfigs : [];
   const auditoriumRows = auditoriums.map((aud) => {
     const isLocked = Boolean(aud.is_locked);
-    return `<tr><td><strong>${escapeHtml(aud.name)}</strong></td><td>${escapeHtml(aud.capacity || 300)}</td><td><span class="status ${isLocked ? 'rejected' : 'approved'}">${isLocked ? 'Disabled' : 'Enabled'}</span></td><td><form action="/admin/auditoriums/${aud.id}/lock" method="post" style="display:inline"><button class="small-button" type="submit" onclick="return confirm('${isLocked ? 'Enable this auditorium for bookings?' : 'Disable this auditorium from bookings?'}')">${isLocked ? 'Enable' : 'Disable'}</button></form> <form action="/admin/auditoriums/${aud.id}/delete" method="post" style="display:inline"><button class="small-button reject-button" type="submit" onclick="return confirm('Are you sure you want to delete this auditorium permanently?')">Delete</button></form></td></tr>`;
+    const disabled = isLocked ? 'disabled' : '';
+    return `<tr><td><form id="aud-${aud.id}" action="/admin/auditoriums/${aud.id}?from=admin" method="post"><input name="name" value="${escapeHtml(aud.name)}" ${disabled} required></td><td><input name="capacity" type="number" value="${escapeHtml(aud.capacity || 300)}" min="1" ${disabled} required style="width:70px"></td><td><input name="min_students" type="number" value="${escapeHtml(aud.min_students || 1)}" min="1" ${disabled} required style="width:70px"></td><td><span class="status ${isLocked ? 'rejected' : 'approved'}">${isLocked ? 'Disabled' : 'Enabled'}</span></td><td>${isLocked ? '' : `<button form="aud-${aud.id}" class="small-button" type="submit" onclick="return confirm('Save changes to ${escapeHtml(aud.name)}?')">Save</button>`} <form action="/admin/auditoriums/${aud.id}/lock?from=admin" method="post" style="display:inline"><button class="small-button" type="submit" onclick="return confirm('${isLocked ? 'Enable this auditorium for bookings?' : 'Disable this auditorium from bookings?'}')">${isLocked ? 'Enable' : 'Disable'}</button></form> <form action="/admin/auditoriums/${aud.id}/delete?from=admin" method="post" style="display:inline"><button class="small-button reject-button" type="submit" onclick="return confirm('Are you sure you want to delete ${escapeHtml(aud.name)} permanently?')">Delete</button></form></td></tr>`;
   }).join('');
   const requestHead = isAdmin(user) ? '<th>Department</th><th>Programme</th><th>Students</th><th>Date & time</th><th>Auditorium</th><th>Requester</th><th>Contact</th><th>Status</th><th>Action</th>' : '<th>Programme</th><th>When</th><th>Room</th><th>Status</th><th>Action</th>';
-  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin', user)}<section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${isAdmin(user) ? `<section class="user-management"><form action="/admin/requests/delete-all" method="post"><button class="reject-button" type="submit" onclick="return confirm('Are you sure you want to delete ALL requests? This cannot be undone.')">Delete All Requests</button></form></section>` : ''}${isAdmin(user) ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage users and roles ↗</a></div><p class="small-copy">Request page is currently <strong>${requestPageEnabled ? 'Enabled' : 'Disabled'}</strong> for users. <a class="page-nav" href="/">View request page</a></p><form class="create-user" action="/admin/request-page/toggle" method="post" style="margin:0 0 16px"><button class="${requestPageEnabled ? 'reject-button' : ''}" type="submit" onclick="return confirm('${requestPageEnabled ? 'Disable the request page? Users will not be able to submit new auditorium requests.' : 'Enable the request page so users can submit new auditorium requests?'}')">${requestPageEnabled ? 'Disable request page' : 'Enable request page'}</button></form><p class="small-copy">${auditoriums.filter(a => !a.is_locked).length} enabled room(s) available on the public request form.</p><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Auditorium</th><th>Capacity</th><th>Status</th><th>Actions</th></tr></thead><tbody>${auditoriumRows || '<tr><td colspan="4">No auditoriums registered.</td></tr>'}</tbody></table></div><form class="create-user" action="/admin/auditoriums" method="post"><input name="name" placeholder="New auditorium name" required><input name="capacity" type="number" min="1" value="300" placeholder="Capacity" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
+  res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin panel | Auditorium permissions</title><link rel="stylesheet" href="/styles.css"></head><body><main class="shell panel"><div class="college-heading"><h1>SVIT VASAD</h1></div><header class="masthead"><div><p class="kicker">${escapeHtml(user.role)}</p><h1>Approval<br><em>desk</em></h1></div><a class="page-nav" href="/dashboard">Dashboard</a><form action="/logout" method="post"><button class="quiet" type="submit">Sign out</button></form></header>${adminNavBar('/admin', user)}<section class="panel-intro"><p class="eyebrow">Signed in as ${escapeHtml(user.name)}</p><h2>Requests in your lane.</h2><p class="lede">Department head → electrician → principal → maintenance.</p></section><section class="table-wrap"><table><thead><tr>${requestHead}</tr></thead><tbody>${rows}</tbody></table></section>${isAdmin(user) ? `<section class="user-management"><form action="/admin/requests/delete-all" method="post"><button class="reject-button" type="submit" onclick="return confirm('Are you sure you want to delete ALL requests? This cannot be undone.')">Delete All Requests</button></form></section>` : ''}${isAdmin(user) ? `<section class="user-management"><div class="section-heading"><h3>Auditoriums</h3></div><div class="admin-tools"><a class="page-nav" href="/admin/auditoriums/manage">Manage auditorium list ↗</a><a class="page-nav" href="/admin/departments">Manage users and roles ↗</a></div><p class="small-copy">Request page is currently <strong>${requestPageEnabled ? 'Enabled' : 'Disabled'}</strong> for users. <a class="page-nav" href="/">View request page</a></p><form class="create-user" action="/admin/request-page/toggle" method="post" style="margin:0 0 16px"><button class="${requestPageEnabled ? 'reject-button' : ''}" type="submit" onclick="return confirm('${requestPageEnabled ? 'Disable the request page? Users will not be able to submit new auditorium requests.' : 'Enable the request page so users can submit new auditorium requests?'}')">${requestPageEnabled ? 'Disable request page' : 'Enable request page'}</button></form><p class="small-copy">${auditoriums.filter(a => !a.is_locked).length} enabled room(s) available on the public request form.</p><div class="table-wrap" style="margin-bottom:16px"><table><thead><tr><th>Auditorium</th><th>Capacity</th><th>Min. Students</th><th>Status</th><th>Actions</th></tr></thead><tbody>${auditoriumRows || '<tr><td colspan="5">No auditoriums registered.</td></tr>'}</tbody></table></div><form class="create-user" action="/admin/auditoriums?from=admin" method="post"><input name="name" placeholder="New auditorium name" required><input name="capacity" type="number" min="1" value="300" placeholder="Capacity" required><button type="submit">Add auditorium</button></form></section>` : ''}</main></body></html>`);
 });
 
 app.post('/admin/request-page/toggle', requireLogin, async (req, res) => {
@@ -1096,7 +1133,7 @@ app.post('/admin/auditoriums', requireLogin, async (req, res) => {
     applyLegacyRoles(item, roles);
     localAuditoriums.push(item);
   }
-  res.redirect('/admin/auditoriums/manage');
+  res.redirect(req.query.from === 'admin' ? '/admin' : '/admin/auditoriums/manage');
 });
 
 app.get('/admin/auditoriums/manage', requireLogin, async (req, res) => {
@@ -1238,7 +1275,7 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   } else {
     Object.assign(localAuditoriums.find((auditorium) => String(auditorium.id) === req.params.id) || {}, values);
   }
-  res.redirect('/admin/auditoriums/manage');
+  res.redirect(req.query.from === 'admin' ? '/admin' : '/admin/auditoriums/manage');
 });
 
 app.post('/admin/auditoriums/:id/delete', requireLogin, async (req, res) => {
@@ -1250,7 +1287,7 @@ app.post('/admin/auditoriums/:id/delete', requireLogin, async (req, res) => {
     const index = localAuditoriums.findIndex((auditorium) => String(auditorium.id) === req.params.id);
     if (index >= 0) localAuditoriums.splice(index, 1);
   }
-  res.redirect('/admin/auditoriums/manage');
+  res.redirect(req.query.from === 'admin' ? '/admin' : '/admin/auditoriums/manage');
 });
 
 app.post('/admin/auditoriums/:id/lock', requireLogin, async (req, res) => {
@@ -1264,7 +1301,7 @@ app.post('/admin/auditoriums/:id/lock', requireLogin, async (req, res) => {
   } else {
     auditorium.is_locked = isLocked;
   }
-  res.redirect('/admin/auditoriums/manage');
+  res.redirect(req.query.from === 'admin' ? '/admin' : '/admin/auditoriums/manage');
 });
 
 app.get('/admin/departments', requireLogin, async (req, res) => {
@@ -1594,7 +1631,7 @@ function requestStatus(request, auditoriumConfigs) {
 function requestWhen(request) {
   const slots = Array.isArray(request.time_slots) && request.time_slots.length ? request.time_slots : [{ start_time: request.start_time, end_time: request.end_time }];
   const submittedAt = request.created_at ? new Date(request.created_at).toLocaleString() : 'Not available';
-  return `${escapeHtml(request.duration)} · ${slots.map((slot) => `${escapeHtml(slot.date || request.date || '')} ${escapeHtml(slot.start_time || '')} - ${escapeHtml(slot.end_time || '')}`).join('<br>')}<small>Submitted: ${escapeHtml(submittedAt)}</small>`;
+  return `${escapeHtml(request.duration)} · ${slots.map((slot) => `${escapeHtml(slot.date || request.date || '')} ${format12h(slot.start_time)} - ${format12h(slot.end_time)}`).join('<br>')}<small>Submitted: ${escapeHtml(submittedAt)}</small>`;
 }
 
 function requestSlots(request) {
@@ -1603,21 +1640,37 @@ function requestSlots(request) {
     : [{ date: request.date, start_time: request.start_time, end_time: request.end_time }];
 }
 
+const SLOT_GAP_MINUTES = 30;
+
+function timeToMinutes(time) {
+  const [hours, minutes] = String(time).split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function format12h(time) {
+  if (!time) return '';
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(time));
+  if (!match) return time;
+  let hours = Number(match[1]);
+  const minutes = match[2];
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  return `${hours}:${minutes} ${suffix}`;
+}
+
 function slotsOverlap(first, second) {
   if (first.date !== second.date) return false;
   if (!first.start_time || !first.end_time || !second.start_time || !second.end_time) return true;
-  const toMinutes = (time) => {
-    const [hours, minutes] = time.split(':').map(Number);
-    return hours * 60 + minutes;
-  };
-  const firstStart = toMinutes(first.start_time);
-  const secondStart = toMinutes(second.start_time);
-  const firstEndValue = toMinutes(first.end_time);
-  const secondEndValue = toMinutes(second.end_time);
+  const firstStart = timeToMinutes(first.start_time);
+  const secondStart = timeToMinutes(second.start_time);
+  const firstEndValue = timeToMinutes(first.end_time);
+  const secondEndValue = timeToMinutes(second.end_time);
   if (firstEndValue <= firstStart || secondEndValue <= secondStart) return true;
-  const firstEnd = firstEndValue;
-  const secondEnd = secondEndValue;
-  return firstStart < secondEnd && secondStart < firstEnd;
+  return firstStart < secondEndValue + SLOT_GAP_MINUTES && secondStart < firstEndValue + SLOT_GAP_MINUTES;
+}
+
+function formatSlotsAmPm(slots) {
+  return (slots || []).map((slot) => `${slot.date || ''} ${format12h(slot.start_time)} - ${format12h(slot.end_time)}`).join(' · ');
 }
 
 function auditoriumIsBooked(requestsToCheck, auditorium, slots) {
@@ -1628,23 +1681,37 @@ function auditoriumIsBooked(requestsToCheck, auditorium, slots) {
 }
 
 function approvalAction(request, user, auditoriumConfigs) {
+  if (!requestNeedsUserApproval(user, request, auditoriumConfigs)) return '<span class="muted">Waiting</span>';
+  return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
+}
+
+function requestNeedsUserApproval(user, request, auditoriumConfigs) {
   const auditorium = auditoriumConfigs.find((candidate) => candidate.name === request.auditorium) || {};
   const transition = approvalTransition(request, auditorium);
-  if (!transition || !transition.role) return '<span class="muted">Waiting</span>';
-  if (user.role === 'admin') {
-    return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
-  }
-  if (user.role !== transition.role) return '<span class="muted">Waiting</span>';
+  if (!transition || !transition.role) return false;
+  if (user.role === 'admin') return true;
+  if (user.role !== transition.role) return false;
   if (user.role === 'head') {
     const auditoriumHead = auditorium.head_user_id;
-    if (auditoriumHead && user.id !== auditoriumHead) return '<span class="muted">Waiting</span>';
-    if (!auditoriumHead && !(user.departments || [user.department]).includes(request.department)) return '<span class="muted">Waiting</span>';
+    if (auditoriumHead && user.id !== auditoriumHead) return false;
+    if (!auditoriumHead && !(user.departments || [user.department]).includes(request.department)) return false;
   }
-  if (transition.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return '<span class="muted">Waiting</span>';
-  if (transition.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return '<span class="muted">Waiting</span>';
-  if (transition.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return '<span class="muted">Waiting</span>';
-  if (transition.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return '<span class="muted">Waiting</span>';
-  return `<form class="request-actions" action="/admin/requests/${encodeURIComponent(request.id)}/approve" method="post"><button class="small-button" type="submit">Approve</button></form><form class="request-actions reject-form" action="/admin/requests/${encodeURIComponent(request.id)}/reject" method="post"><input name="remarks" placeholder="Reject remarks" aria-label="Reject remarks" required><button class="small-button reject-button" type="submit">Reject</button></form>`;
+  if (transition.role === 'principal' && auditorium.principal_user_id && user.id !== auditorium.principal_user_id) return false;
+  if (transition.role === 'maintenance' && auditorium.maintenance_user_id && user.id !== auditorium.maintenance_user_id) return false;
+  if (transition.role === 'electrician' && auditorium.electrician_user_id && user.id !== auditorium.electrician_user_id) return false;
+  if (transition.role === 'admin_officer' && auditorium.admin_officer_user_id && user.id !== auditorium.admin_officer_user_id) return false;
+  return true;
+}
+
+function requestVisibleToUser(user, request, auditoriumConfigs) {
+  if (isAdmin(user) || ['principal', 'maintenance', 'electrician', 'admin_officer', 'chairman', 'higher_authority', 'purchase_officer'].includes(user.role)) return true;
+  if (user.role === 'head') {
+    const auditorium = auditoriumConfigs.find((candidate) => candidate.name === request.auditorium) || {};
+    const auditoriumHead = auditorium.head_user_id;
+    if (auditoriumHead) return user.id === auditoriumHead;
+    return (user.departments || [user.department]).includes(request.department);
+  }
+  return (user.departments || [user.department]).includes(request.department);
 }
 
 function approvalRoles(auditorium) {
@@ -2340,6 +2407,41 @@ app.get('/api/requests', async (req, res) => {
   res.json(data);
 });
 
+app.get('/api/availability', async (req, res) => {
+  try {
+    const auditorium = String(req.query.auditorium || '').trim();
+    let slots;
+    try {
+      slots = JSON.parse(req.query.slots || '[]');
+    } catch {
+      slots = [];
+    }
+    if (!auditorium || !Array.isArray(slots) || !slots.length) {
+      return res.json({ available: true });
+    }
+    const cleanedSlots = slots
+      .map((slot) => ({ date: String(slot.date || '').trim(), start_time: String(slot.start_time || '').trim(), end_time: String(slot.end_time || '').trim() }))
+      .filter((slot) => slot.date);
+    let existingRequests = requests;
+    if (supabase) {
+      const { data, error } = await supabase.from('requests').select('*');
+      if (error) return res.json({ available: true });
+      existingRequests = data;
+    }
+    const conflict = auditoriumIsBooked(existingRequests, auditorium, cleanedSlots);
+    if (!conflict) return res.json({ available: true });
+    return res.json({
+      available: false,
+      department: conflict.request.department || 'Unknown department',
+      date: conflict.slot.date || '',
+      start_time: conflict.slot.start_time || '',
+      end_time: conflict.slot.end_time || ''
+    });
+  } catch (error) {
+    res.json({ available: true });
+  }
+});
+
 app.post('/requests', async (req, res) => {
   if ((await getSystemSetting('REQUEST_PAGE_ENABLED')) === 'false') {
     return res.status(403).send('The auditorium request page is currently disabled by an administrator. Please try again later.');
@@ -2407,6 +2509,7 @@ app.post('/requests', async (req, res) => {
     const details = new URLSearchParams({
       conflict: '1',
       department: bookingConflict.request.department || 'Unknown department',
+      auditorium: bookingConflict.request.auditorium || request.auditorium,
       date: bookingConflict.slot.date || '',
       start_time: bookingConflict.slot.start_time || '',
       end_time: bookingConflict.slot.end_time || ''
@@ -3240,7 +3343,7 @@ async function markNotificationsRead(userId, id) {
 
 // --- Role-module permission matrix (blueprint section 12) ---
 const defaultModulePermissions = [
-  ['auditorium', 'admin', 'manage'], ['auditorium', 'head', 'approve'], ['auditorium', 'department_user', 'request'], ['auditorium', 'sub_admin', 'manage'], ['auditorium', 'principal', 'approve'],
+  ['auditorium', 'admin', 'manage'], ['auditorium', 'head', 'approve'], ['auditorium', 'department_user', 'request'], ['auditorium', 'sub_admin', 'manage'], ['auditorium', 'principal', 'approve'], ['auditorium', 'admin_officer', 'approve'],
   ['maintenance', 'admin', 'manage'], ['maintenance', 'head', 'approve'], ['maintenance', 'department_user', 'request'], ['maintenance', 'maintenance', 'approve'], ['maintenance', 'electrician', 'approve'], ['maintenance', 'sub_admin', 'manage'], ['maintenance', 'principal', 'approve'], ['maintenance', 'work_done', 'approve'],
   ['purchase', 'admin', 'manage'], ['purchase', 'head', 'approve'], ['purchase', 'department_user', 'request'], ['purchase', 'purchase_officer', 'approve'], ['purchase', 'purchase_clerk', 'stock'], ['purchase', 'admin_officer', 'approve'], ['purchase', 'sub_admin', 'manage'], ['purchase', 'principal', 'approve'], ['purchase', 'chairman', 'approve'],
   ['car', 'admin', 'manage'], ['car', 'head', 'approve'], ['car', 'department_user', 'request'], ['car', 'admin_officer', 'approve'], ['car', 'sub_admin', 'manage'], ['car', 'principal', 'approve'],

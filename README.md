@@ -16,6 +16,7 @@ A production-ready, dynamic web-based Campus Management System for:
 - Email, WhatsApp, SMS & In-App Notifications
 - PDF and Excel Reports
 
+
 ---
 
 ## 1. Technology Stack

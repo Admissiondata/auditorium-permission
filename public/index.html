@@ -47,8 +47,8 @@
             <div class="slot-list" id="slot-list">
               <div class="slot-row">
                 <label>Date<input name="slot_date[]" type="date" required></label>
-                <label>From<input name="slot_start_time[]" type="time"></label>
-                <label>To<input name="slot_end_time[]" type="time"></label>
+                <label>From<input name="slot_start_time[]" type="time" step="60" required></label>
+                <label>To<input name="slot_end_time[]" type="time" step="60" required></label>
                 <button class="remove-slot" type="button" aria-label="Remove date and time slot" hidden>Remove</button>
               </div>
             </div>
@@ -211,20 +211,6 @@
     const slotList = document.querySelector('#slot-list');
     const addSlotButton = document.querySelector('#add-slot');
 
-    addSlotButton.addEventListener('click', () => {
-      const slot = slotList.querySelector('.slot-row').cloneNode(true);
-      slot.querySelectorAll('input').forEach((input) => {
-        input.value = '';
-        if (input.name === 'slot_date[]') {
-          setDateInputLimits(input);
-        }
-      });
-      const removeButton = slot.querySelector('.remove-slot');
-      removeButton.hidden = false;
-      removeButton.addEventListener('click', () => slot.remove());
-      slotList.append(slot);
-    });
-
     const enrollmentField = document.querySelector('#enrollment-field');
     document.querySelectorAll('input[name="requester_type"]').forEach((radio) => {
       radio.addEventListener('change', () => {
@@ -253,10 +239,11 @@
     const query = new URLSearchParams(window.location.search);
     if (query.get('conflict') === '1') {
       const department = query.get('department');
+      const auditorium = query.get('auditorium') || 'this auditorium';
       const date = query.get('date');
-      const startTime = query.get('start_time');
-      const endTime = query.get('end_time');
-      document.querySelector('#conflict-message').textContent = `${department} has already booked this auditorium on ${date}${startTime || endTime ? ` from ${startTime || '--:--'} to ${endTime || '--:--'}` : ''}. Please choose another slot.`;
+      const startTime = format12h(query.get('start_time'));
+      const endTime = format12h(query.get('end_time'));
+      document.querySelector('#conflict-message').textContent = `${department} has already booked ${auditorium} on ${date}${startTime || endTime ? ` from ${startTime || '--:--'} to ${endTime || '--:--'}` : ''}. This slot is already booked. Please book another auditorium or choose another date and time.`;
       conflictPopup.showModal();
       window.history.replaceState({}, document.title, window.location.pathname);
     }
@@ -272,6 +259,72 @@
     const requestForm = document.querySelector('.request-form:not([style*="display:none"])') || document.querySelector('.request-form');
     const allowPastDates = document.body.dataset.allowPastDates === 'true';
     const todayISO = new Date().toISOString().split('T')[0];
+
+    function format12h(value) {
+      if (!value) return '';
+      const match = /^(\d{1,2}):(\d{2})/.exec(value);
+      if (!match) return value;
+      let hours = Number(match[1]);
+      const minutes = match[2];
+      const suffix = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12 || 12;
+      return `${hours}:${minutes} ${suffix}`;
+    }
+
+    function attachAmPmHint(input) {
+      if (!input || input.dataset.ampmHint) return;
+      input.dataset.ampmHint = '1';
+      const hint = document.createElement('small');
+      hint.className = 'time-ampm-hint';
+      const update = () => {
+        hint.textContent = input.value ? format12h(input.value) : '12-hour format';
+        hint.style.display = input.value ? 'block' : 'none';
+      };
+      input.addEventListener('input', update);
+      input.addEventListener('change', update);
+      update();
+      input.insertAdjacentElement('afterend', hint);
+    }
+
+    slotList.querySelectorAll('input[type="time"]').forEach(attachAmPmHint);
+    addSlotButton.addEventListener('click', () => {
+      const slot = slotList.querySelector('.slot-row').cloneNode(true);
+      slot.querySelectorAll('input').forEach((input) => {
+        input.value = '';
+        if (input.name === 'slot_date[]') {
+          setDateInputLimits(input);
+        }
+      });
+      slot.querySelectorAll('input[type="time"]').forEach(attachAmPmHint);
+      const removeButton = slot.querySelector('.remove-slot');
+      removeButton.hidden = false;
+      removeButton.addEventListener('click', () => slot.remove());
+      slotList.append(slot);
+    });
+
+    async function checkAvailabilityInstantly() {
+      const auditoriumInput = requestForm?.querySelector('input[name="auditorium"]:checked');
+      if (!auditoriumInput) return { available: true };
+      const slotRows = requestForm.querySelectorAll('.slot-row');
+      const slots = [];
+      slotRows.forEach((row) => {
+        const dateInput = row.querySelector('input[name="slot_date[]"]');
+        const startInput = row.querySelector('input[name="slot_start_time[]"]');
+        const endInput = row.querySelector('input[name="slot_end_time[]"]');
+        if (dateInput && startInput && endInput && dateInput.value && startInput.value && endInput.value) {
+          slots.push({ date: dateInput.value, start_time: startInput.value, end_time: endInput.value });
+        }
+      });
+      if (!slots.length) return { available: true };
+      const params = new URLSearchParams({ auditorium: auditoriumInput.value, slots: JSON.stringify(slots) });
+      try {
+        const response = await fetch(`/api/availability?${params.toString()}`);
+        if (!response.ok) return { available: true };
+        return await response.json();
+      } catch {
+        return { available: true };
+      }
+    }
 
     function setDateInputLimits(dateInput) {
       if (!dateInput) return;
@@ -345,13 +398,21 @@
         radio.addEventListener('change', () => validateMinStudentCount(true));
       });
 
-      requestForm.addEventListener('submit', (e) => {
+      requestForm.addEventListener('submit', async (e) => {
         const validPastDates = validatePastDates(true);
         const validMinStudents = validateMinStudentCount(true);
         if (!validPastDates || !validMinStudents) {
           e.preventDefault();
           const firstInvalid = requestForm.querySelector('input[name="slot_date[]"]:invalid, input[name="student_count"]:invalid') || studentCountInput;
           if (firstInvalid) firstInvalid.focus();
+          return;
+        }
+        const result = await checkAvailabilityInstantly();
+        if (result && result.available === false) {
+          e.preventDefault();
+          const msg = document.querySelector('#conflict-message');
+          msg.textContent = `${result.department} has already booked this auditorium on ${result.date || 'the selected date'}${result.start_time || result.end_time ? ` from ${format12h(result.start_time)} to ${format12h(result.end_time)}` : ''}. This slot is already booked. Please book another auditorium or choose another date and time.`;
+          conflictPopup.showModal();
         }
       });
     }

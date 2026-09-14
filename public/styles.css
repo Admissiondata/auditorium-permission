@@ -984,6 +984,14 @@ td small {
   gap: 14px;
 }
 
+.time-ampm-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .add-slot, .remove-slot {
   margin: 0;
   padding: 8px 0;
