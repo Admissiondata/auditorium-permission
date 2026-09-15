@@ -43,7 +43,7 @@
           <div class="form-grid">
             <label>Department<input name="department" placeholder="e.g. Computer Engineering" required></label>
             <label>Programme name<input name="program" placeholder="e.g. Teachers' Day celebration" required></label>
-            <label>Number of students<input name="student_count" type="number" min="1" step="1" placeholder="e.g. 120" required></label>
+            <label>Number of persons<input name="student_count" type="number" min="1" step="1" placeholder="e.g. 120" required></label>
             <div class="slot-list" id="slot-list">
               <div class="slot-row">
                 <label>Date<input name="slot_date[]" type="date" required></label>
@@ -212,18 +212,19 @@
     const addSlotButton = document.querySelector('#add-slot');
 
     const enrollmentField = document.querySelector('#enrollment-field');
+    const enrollmentInput = enrollmentField.querySelector('input');
+    const updateEnrollmentField = (requesterType) => {
+      const isStudent = requesterType === 'student';
+      enrollmentField.classList.toggle('visible', isStudent);
+      enrollmentInput.required = isStudent;
+      if (!isStudent) enrollmentInput.value = '';
+    };
     document.querySelectorAll('input[name="requester_type"]').forEach((radio) => {
       radio.addEventListener('change', () => {
-        if (radio.value === 'student' && radio.checked) {
-          enrollmentField.classList.add('visible');
-          enrollmentField.querySelector('input').required = true;
-        } else if (radio.value === 'faculty' && radio.checked) {
-          enrollmentField.classList.remove('visible');
-          enrollmentField.querySelector('input').required = false;
-          enrollmentField.querySelector('input').value = '';
-        }
+        if (radio.checked) updateEnrollmentField(radio.value);
       });
     });
+    updateEnrollmentField(document.querySelector('input[name="requester_type"]:checked')?.value || 'student');
 
     const successPopup = document.querySelector('#success-popup');
     const closeSuccessPopup = document.querySelector('#close-success-popup');
@@ -381,7 +382,7 @@
         const minStudents = Number(auditoriumRadio.getAttribute('data-min-students'));
 
         if (minStudents && studentCount < minStudents) {
-          const message = `The selected auditorium requires a minimum of ${minStudents} students. Please enter at least ${minStudents}.`;
+          const message = `The selected auditorium requires a minimum of ${minStudents} persons. Please enter at least ${minStudents}.`;
           studentCountInput.setCustomValidity(message);
           if (showMessage) {
             studentCountInput.reportValidity();

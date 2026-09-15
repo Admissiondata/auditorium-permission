@@ -457,7 +457,7 @@ async function notifyFinalReport(request, auditoriumConfigs) {
   const reportRoles = ['admin_officer', 'electrician', 'maintenance'];
   const allUsers = await getUsers();
   const recipients = allUsers.filter((u) => reportRoles.includes(u.role));
-  const reportText = `All approvals completed for auditorium request.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nStudent count: ${request.student_count || 'Not specified'}\nRequester: ${request.requester_name || request.faculty_name || 'Not specified'}\nContact: ${request.requester_mobile || 'Not specified'}\n\nThis request has been fully approved. Please take note.`;
+  const reportText = `All approvals completed for auditorium request.\n\nDepartment: ${request.department}\nProgramme: ${request.program}\nAuditorium: ${request.auditorium}\nDate: ${request.date}\nTime: ${request.start_time || 'Not specified'} - ${request.end_time || 'Not specified'}\nPerson count: ${request.student_count || 'Not specified'}\nRequester: ${request.requester_name || request.faculty_name || 'Not specified'}\nContact: ${request.requester_mobile || 'Not specified'}\n\nThis request has been fully approved. Please take note.`;
   for (const recipient of recipients) {
     await createNotification({
       userId: recipient.id,
@@ -518,7 +518,7 @@ async function renderRequestPage(req, res) {
     const options = visibleConfigs.length
       ? visibleConfigs.map((auditorium) => auditorium.is_locked
           ? `<label class="choice" title="Disabled by admin"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" disabled><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Disabled by admin)</span></span></label>`
-          : `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" data-min-students="${auditorium.min_students || 1}" required><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Min: ${auditorium.min_students || 1} students)</span></span></label>`).join('')
+          : `<label class="choice"><input type="radio" name="auditorium" value="${escapeHtml(auditorium.name)}" data-min-students="${auditorium.min_students || 1}" required><span>${auditoriumLabel(auditorium)}<span class="min-students-badge">(Min: ${auditorium.min_students || 1} persons)</span></span></label>`).join('')
       : '<p class="empty-rooms">No auditoriums are currently available. An administrator must unlock a room before it can be selected.</p>';
     const departmentOptions = departments.map((department) => `<option value="${escapeHtml(department.name)}">${escapeHtml(department.name)}</option>`).join('');
     const purchaseDepartmentOptions = '<option value="">Select department</option>' + departmentOptions;
@@ -1268,7 +1268,7 @@ app.post('/admin/auditoriums/:id', requireLogin, async (req, res) => {
   const values = { name: String(req.body.name || '').trim(), capacity, min_students: minStudents, approval_1_role: req.body.approval_1_role, approval_2_role: req.body.approval_2_role, approval_3_role: req.body.approval_3_role, approval_4_role: req.body.approval_4_role, head_user_id: req.body.head_user_id || '', principal_user_id: req.body.principal_user_id || '', maintenance_user_id: req.body.maintenance_user_id || '', electrician_user_id: req.body.electrician_user_id || '', admin_officer_user_id: req.body.admin_officer_user_id || '' };
   if (!values.name) return res.status(400).send('Auditorium name is required.');
   if (!Number.isInteger(capacity) || capacity < 1) return res.status(400).send('Auditorium capacity must be a positive whole number.');
-  if (!Number.isInteger(minStudents) || minStudents < 1) return res.status(400).send('Minimum students must be a positive whole number.');
+  if (!Number.isInteger(minStudents) || minStudents < 1) return res.status(400).send('Minimum persons must be a positive whole number.');
   if (supabase) {
     const { error } = await supabase.from('auditoriums').update(values).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -1578,7 +1578,7 @@ app.post('/admin/requests/:id', requireLogin, async (req, res) => {
   }
   if (!Array.isArray(timeSlots) || !timeSlots.length || timeSlots.some((slot) => !slot.date)) return res.status(400).send('At least one valid date/time slot is required.');
   const values = { department: String(req.body.department || '').trim(), program: String(req.body.program || '').trim(), student_count: Number(req.body.student_count) || Number(request.student_count) || 1, date: timeSlots[0].date, end_date: String(req.body.end_date || timeSlots.at(-1).date), start_time: timeSlots[0].start_time || null, end_time: timeSlots[0].end_time || null, time_slots: timeSlots, auditorium: req.body.auditorium, faculty_name: String(req.body.faculty_name || '').trim(), status: req.body.status };
-  if (!values.department || !values.program || !values.auditorium || !Number.isInteger(values.student_count) || values.student_count < 1) return res.status(400).send('Department, programme, auditorium, and a valid student count are required.');
+  if (!values.department || !values.program || !values.auditorium || !Number.isInteger(values.student_count) || values.student_count < 1) return res.status(400).send('Department, programme, auditorium, and a valid person count are required.');
   if (supabase) {
     const { error } = await supabase.from('requests').update(values).eq('id', req.params.id);
     if (error) return res.status(500).send(error.message);
@@ -2495,7 +2495,7 @@ app.post('/requests', async (req, res) => {
   // Validate minimum students requirement
   const selectedAuditorium = (await getAuditoriumConfigs()).find((a) => a.name === request.auditorium);
   if (selectedAuditorium && selectedAuditorium.min_students && request.student_count < selectedAuditorium.min_students) {
-    return res.status(400).send(`${selectedAuditorium.name} requires a minimum of ${selectedAuditorium.min_students} students. You entered ${request.student_count}.`);
+    return res.status(400).send(`${selectedAuditorium.name} requires a minimum of ${selectedAuditorium.min_students} persons. You entered ${request.student_count}.`);
   }
 
   let existingRequests = requests;
